@@ -36,6 +36,7 @@ impl Cella {
 
 // ─── Difficulty ───────────────────────────────────────────────────────────────
 
+#[derive(Clone)]
 struct Config {
     larghezza: usize,
     altezza: usize,
@@ -125,7 +126,7 @@ struct Gioco {
 }
 
 impl Gioco {
-    fn nuovo(cfg: Config) -> Self {
+    fn nuovo(cfg: &Config) -> Self {
         let riga = vec![Cella::default(); cfg.larghezza];
         let griglia = vec![riga; cfg.altezza];
         let mut gioco = Gioco {
@@ -361,7 +362,7 @@ impl Gioco {
             println!();
             println!("  BOOM! Hai calpestato una mina.");
             execute!(out, SetForegroundColor(Color::DarkGrey))?;
-            println!("  Premi INVIO o Q per uscire.");
+            println!("  [INVIO] Rivinci  |  [M] Menu  |  [Q] Esci");
             execute!(out, ResetColor)?;
         } else if self.vittoria {
             println!();
@@ -375,7 +376,7 @@ impl Gioco {
             println!();
             println!("  Complimenti! Hai ripulito il campo minato!");
             execute!(out, SetForegroundColor(Color::DarkGrey))?;
-            println!("  Premi INVIO o Q per uscire.");
+            println!("  [INVIO] Rivinci  |  [M] Menu  |  [Q] Esci");
             execute!(out, ResetColor)?;
         }
 
@@ -384,42 +385,41 @@ impl Gioco {
     }
 }
 
+// ─── Post-game action ────────────────────────────────────────────────────────
+
+enum AzioneFinale {
+    Rivinci,   // same config, new board
+    Menu,      // go back to difficulty menu
+    Esci,      // quit
+}
+
 // ─── Main ─────────────────────────────────────────────────────────────────────
 
-fn main() -> io::Result<()> {
-    // Difficulty selection runs in normal (cooked) mode — plain stdin reads
-    let cfg = mostra_menu()?;
-
-    // Enter raw / alternate-screen mode for the actual game
-    terminal::enable_raw_mode()?;
+/// Runs one full game session (raw mode already active).
+/// Returns what the player wants to do next.
+fn gioca(cfg: &Config) -> io::Result<AzioneFinale> {
     let mut stdout = stdout();
-    execute!(
-        stdout,
-        terminal::EnterAlternateScreen,
-        cursor::Hide,
-        Clear(ClearType::All)
-    )?;
+    execute!(stdout, Clear(ClearType::All))?;
 
     let mut gioco = Gioco::nuovo(cfg);
 
-    // Drain any events that accumulated while the menu was running in cooked
-    // mode (most importantly the Enter keypress that confirmed the difficulty).
+    // Drain stale events (Enter from menu or previous session end).
     while event::poll(Duration::from_millis(0))? {
         let _ = event::read()?;
     }
 
     gioco.disegna()?;
-    'game: loop {
-        // If the game has ended, wait for a final keypress then quit
+    loop {
         if gioco.game_over || gioco.vittoria {
+            // Board frozen — wait for a decisive keypress.
             loop {
                 if event::poll(Duration::from_millis(200))? {
                     if let Event::Key(ke) = event::read()? {
                         if ke.kind != KeyEventKind::Press { continue; }
                         match ke.code {
-                            KeyCode::Enter
-                            | KeyCode::Char('q')
-                            | KeyCode::Char('Q') => break 'game,
+                            KeyCode::Enter                              => return Ok(AzioneFinale::Rivinci),
+                            KeyCode::Char('m') | KeyCode::Char('M')   => return Ok(AzioneFinale::Menu),
+                            KeyCode::Char('q') | KeyCode::Char('Q')   => return Ok(AzioneFinale::Esci),
                             _ => {}
                         }
                     }
@@ -427,52 +427,54 @@ fn main() -> io::Result<()> {
             }
         }
 
-        // Normal input handling with a small timeout so the loop stays responsive
         if event::poll(Duration::from_millis(50))? {
             if let Event::Key(ke) = event::read()? {
-                if ke.kind != KeyEventKind::Press {
-                    continue;
-                }
+                if ke.kind != KeyEventKind::Press { continue; }
                 match ke.code {
-                    KeyCode::Up => {
-                        if gioco.cursore_y > 0 {
-                            gioco.cursore_y -= 1;
-                        }
-                    }
-                    KeyCode::Down => {
-                        if gioco.cursore_y < gioco.altezza - 1 {
-                            gioco.cursore_y += 1;
-                        }
-                    }
-                    KeyCode::Left => {
-                        if gioco.cursore_x > 0 {
-                            gioco.cursore_x -= 1;
-                        }
-                    }
-                    KeyCode::Right => {
-                        if gioco.cursore_x < gioco.larghezza - 1 {
-                            gioco.cursore_x += 1;
-                        }
-                    }
+                    KeyCode::Up    => { if gioco.cursore_y > 0                  { gioco.cursore_y -= 1; } }
+                    KeyCode::Down  => { if gioco.cursore_y < gioco.altezza - 1  { gioco.cursore_y += 1; } }
+                    KeyCode::Left  => { if gioco.cursore_x > 0                  { gioco.cursore_x -= 1; } }
+                    KeyCode::Right => { if gioco.cursore_x < gioco.larghezza - 1{ gioco.cursore_x += 1; } }
                     KeyCode::Enter => {
                         gioco.rivela(gioco.cursore_x, gioco.cursore_y);
                         gioco.controlla_vittoria();
                     }
-                    KeyCode::Char(' ') => {
-                        gioco.alterna_bandierina();
-                    }
-                    KeyCode::Char('q') | KeyCode::Char('Q') => {
-                        break 'game;
-                    }
+                    KeyCode::Char(' ') => { gioco.alterna_bandierina(); }
+                    KeyCode::Char('q') | KeyCode::Char('Q') => return Ok(AzioneFinale::Esci),
                     _ => {}
                 }
                 gioco.disegna()?;
             }
         }
     }
+}
 
-    // Restore terminal state
-    execute!(stdout, cursor::Show, terminal::LeaveAlternateScreen)?;
-    terminal::disable_raw_mode()?;
+fn main() -> io::Result<()> {
+    'app: loop {
+        // ── Menu (cooked mode) ────────────────────────────────────────────────
+        let cfg = mostra_menu()?;
+
+        // ── Enter raw / alternate-screen mode ─────────────────────────────────
+        terminal::enable_raw_mode()?;
+        let mut stdout = stdout();
+        execute!(stdout, terminal::EnterAlternateScreen, cursor::Hide)?;
+
+        // ── Session loop: replay without returning to menu ─────────────────────
+        let azione = loop {
+            match gioca(&cfg)? {
+                AzioneFinale::Rivinci => continue,          // same config, new board
+                other                 => break other,       // Menu or Esci
+            }
+        };
+
+        // ── Restore terminal ──────────────────────────────────────────────────
+        execute!(stdout, cursor::Show, terminal::LeaveAlternateScreen)?;
+        terminal::disable_raw_mode()?;
+
+        match azione {
+            AzioneFinale::Menu => continue 'app,
+            _                  => break 'app,              // Esci
+        }
+    }
     Ok(())
 }
