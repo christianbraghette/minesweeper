@@ -96,11 +96,11 @@ fn show_menu() -> io::Result<Config> {
         println!("╠════════════════════════════════════════════╣");
         println!("║  Select difficulty:                        ║");
         println!("║                                            ║");
-        println!("║  1. Beginner      ( 9× 9, 10) ~12.3%       ║");
-        println!("║  2. Intermediate  (16×16, 40) ~15.6%       ║");
-        println!("║  3. Expert        (30×16, 99) ~20.6%       ║");
-        println!("║  4. Tryhard       (30×20,140) ~23.3%       ║");
-        println!("║  5. Extreme       (30×24,200) ~27.7%       ║");
+        println!("║     1. Beginner         ( 9× 9, 10)        ║");
+        println!("║     2. Intermediate     (16×16, 40)        ║");
+        println!("║     3. Expert           (30×16, 99)        ║");
+        println!("║     4. Tryhard          (30×20,140)        ║");
+        println!("║     5. Extreme          (30×24,200)        ║");
         println!("╚════════════════════════════════════════════╝");
         print!("Choice [1-5]: ");
         io::stdout().flush()?;
@@ -152,6 +152,8 @@ impl Game {
             victory: false,
         };
         game.generate_map();
+        game.reveal_starting_zone();
+
         game
     }
 
@@ -205,12 +207,139 @@ impl Game {
         }
     }
 
+    fn reveal_starting_zone(&mut self) {
+        // --- 1. TENTATIVO GREEDY: Cerchiamo la prima cella completamente vuota (0 mine adiacenti)
+        for y in 0..self.height {
+            for x in 0..self.width {
+                let cell = &self.grid[y][x];
+                if !cell.has_mine && cell.adjacent_mines == 0 {
+                    // Trovata! La riveliamo e interrompiamo la funzione.
+                    // Questo avvierà l'effetto a catena che scopre l'intera area vuota.
+                    self.reveal(x, y);
+
+                    // Spostiamo anche il cursore del giocatore qui, così l'azione parte da lì
+                    self.cursor_x = x;
+                    self.cursor_y = y;
+                    return;
+                }
+            }
+        }
+
+        // --- 2. FALLBACK: Se non esistono celle da '0', cerchiamo la prima cella non-mina
+        // che ha almeno un vicino identico (stesso numero di mine adiacenti).
+        for y in 0..self.height {
+            for x in 0..self.width {
+                if self.grid[y][x].has_mine {
+                    continue;
+                }
+
+                let current_mines = self.grid[y][x].adjacent_mines;
+
+                // Controlliamo i vicini per vedere se ce n'è uno identico
+                for dy in -1_isize..=1 {
+                    for dx in -1_isize..=1 {
+                        if dy == 0 && dx == 0 {
+                            continue;
+                        }
+                        let ny = y as isize + dy;
+                        let nx = x as isize + dx;
+
+                        if nx >= 0
+                            && nx < self.width as isize
+                            && ny >= 0
+                            && ny < self.height as isize
+                        {
+                            let neighbor = &self.grid[ny as usize][nx as usize];
+                            // Se il vicino non ha mine ed ha lo stesso numero di mine adiacenti
+                            if !neighbor.has_mine && neighbor.adjacent_mines == current_mines {
+                                self.reveal(x, y);
+                                self.cursor_x = x;
+                                self.cursor_y = y;
+                                return;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // --- 3. ULTIMA SPIAGGIA: Se la mappa è un incubo matematico e non trova nemmeno coppie identiche,
+        // riveliamo semplicemente la primissima cella sicura in alto a sinistra.
+        for y in 0..self.height {
+            for x in 0..self.width {
+                if !self.grid[y][x].has_mine {
+                    self.reveal(x, y);
+                    self.cursor_x = x;
+                    self.cursor_y = y;
+                    return;
+                }
+            }
+        }
+    }
+
     // ── Reveal ────────────────────────────────────────────────────────────────
 
     fn reveal(&mut self, x: usize, y: usize) {
-        if self.grid[y][x].state != CellState::Hidden {
+        // ─── GESTIONE DEL CHORDING (Clic su cella già rivelata) ───────────────────
+        if self.grid[y][x].state == CellState::Revealed {
+            let mine_count = self.grid[y][x].adjacent_mines;
+
+            // Se la cella è vuota (0 mine intorno), non c'è nulla da fare/scoprire
+            if mine_count == 0 {
+                return;
+            }
+
+            // 1. Contiamo le bandierine piazzate attorno a questa cella
+            let mut flag_count = 0;
+            for dy in -1_isize..=1 {
+                for dx in -1_isize..=1 {
+                    if dy == 0 && dx == 0 {
+                        continue;
+                    }
+                    let ny = y as isize + dy;
+                    let nx = x as isize + dx;
+
+                    if nx >= 0 && nx < self.width as isize && ny >= 0 && ny < self.height as isize {
+                        if self.grid[ny as usize][nx as usize].state == CellState::Flagged {
+                            flag_count += 1;
+                        }
+                    }
+                }
+            }
+
+            // 2. Se le bandierine sono sufficienti, riveliamo le caselle adiacenti rimaste
+            if flag_count >= mine_count {
+                for dy in -1_isize..=1 {
+                    for dx in -1_isize..=1 {
+                        if dy == 0 && dx == 0 {
+                            continue;
+                        }
+                        let ny = y as isize + dy;
+                        let nx = x as isize + dx;
+
+                        if nx >= 0
+                            && nx < self.width as isize
+                            && ny >= 0
+                            && ny < self.height as isize
+                        {
+                            let target_cell = &self.grid[ny as usize][nx as usize];
+                            // Riveliamo solo se la cella è effettivamente nascosta (evitiamo loop infiniti)
+                            // e NON è protetta da una bandierina.
+                            if target_cell.state == CellState::Hidden {
+                                self.reveal(nx as usize, ny as usize);
+                            }
+                        }
+                    }
+                }
+            }
             return;
         }
+
+        // Se la cella è flaggata, blocchiamo il reveal standard
+        if self.grid[y][x].state == CellState::Flagged {
+            return;
+        }
+
         if self.grid[y][x].has_mine {
             self.game_over = true;
             // Reveal all mines immediately
@@ -334,7 +463,7 @@ impl Game {
         // Controls hint
         execute!(out, SetForegroundColor(Color::DarkGrey))?;
         execute!(out, terminal::Clear(ClearType::CurrentLine))?;
-        println!("  ↑↓←→ move  [ENTER] reveal  [SPACE] flag  [Q] quit");
+        println!("  [↑↓←→] Move  [ENTER] Reveal  [SPACE] Flag  [M] Menu  [Q] Quit");
         execute!(out, ResetColor)?;
 
         execute!(out, SetForegroundColor(Color::Yellow))?;
@@ -504,7 +633,7 @@ impl Game {
         } else if self.victory {
             println!();
             execute!(out, SetForegroundColor(Color::Green))?;
-            println!("  ██╗   ██╗██╗ ██████╗████████╗ ██████╗ ██████╗██╗    ██╗██╗");
+            println!("  ██╗   ██╗██╗ ██████╗████████╗ ██████╗ ██████╗ ██╗   ██╗██╗");
             println!("  ██║   ██║██║██╔════╝╚══██╔══╝██╔═══██╗██╔══██╗╚██╗ ██╔╝██║");
             println!("  ██║   ██║██║██║        ██║   ██║   ██║██████╔╝ ╚████╔╝ ██║");
             println!("  ╚██╗ ██╔╝██║██║        ██║   ██║   ██║██╔══██╗  ╚██╔╝  ╚═╝");
@@ -580,7 +709,7 @@ fn play(cfg: &Config) -> io::Result<PostGameAction> {
             }
         }
 
-        if event::poll(Duration::from_millis(50))? {
+        if event::poll(Duration::from_millis(20))? {
             match event::read()? {
                 // INTERCETTIAMO IL RESIZE IN TEMPO REALE DURANTE IL GIOCO
                 Event::Resize(_, _) => {
@@ -594,22 +723,22 @@ fn play(cfg: &Config) -> io::Result<PostGameAction> {
                         continue;
                     }
                     match ke.code {
-                        KeyCode::Up => {
+                        KeyCode::Up | KeyCode::Char('w') | KeyCode::Char('W') => {
                             if game.cursor_y > 0 {
                                 game.cursor_y -= 1;
                             }
                         }
-                        KeyCode::Down => {
+                        KeyCode::Down | KeyCode::Char('s') | KeyCode::Char('S') => {
                             if game.cursor_y < game.height - 1 {
                                 game.cursor_y += 1;
                             }
                         }
-                        KeyCode::Left => {
+                        KeyCode::Left | KeyCode::Char('a') | KeyCode::Char('A') => {
                             if game.cursor_x > 0 {
                                 game.cursor_x -= 1;
                             }
                         }
-                        KeyCode::Right => {
+                        KeyCode::Right | KeyCode::Char('d') | KeyCode::Char('D') => {
                             if game.cursor_x < game.width - 1 {
                                 game.cursor_x += 1;
                             }
@@ -621,6 +750,7 @@ fn play(cfg: &Config) -> io::Result<PostGameAction> {
                         KeyCode::Char(' ') => {
                             game.toggle_flag();
                         }
+                        KeyCode::Char('m') | KeyCode::Char('M') => return Ok(PostGameAction::Menu),
                         KeyCode::Char('q') | KeyCode::Char('Q') => return Ok(PostGameAction::Quit),
                         _ => {}
                     }
