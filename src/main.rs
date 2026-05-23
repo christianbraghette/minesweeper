@@ -7,208 +7,208 @@ use crossterm::{
 };
 use std::io::{self, BufRead, Write, stdout};
 use std::time::Duration;
-
+ 
 // ─── Data types ──────────────────────────────────────────────────────────────
-
+ 
 #[derive(Clone, Copy, PartialEq)]
-enum StatoCella {
-    Coperta,
-    Rivelata,
-    Bandierina,
+enum CellState {
+    Hidden,
+    Revealed,
+    Flagged,
 }
-
+ 
 #[derive(Clone)]
-struct Cella {
-    ha_mina: bool,
-    mine_vicine: u8,
-    stato: StatoCella,
+struct Cell {
+    has_mine: bool,
+    adjacent_mines: u8,
+    state: CellState,
 }
-
-impl Cella {
+ 
+impl Cell {
     fn default() -> Self {
-        Cella {
-            ha_mina: false,
-            mine_vicine: 0,
-            stato: StatoCella::Coperta,
+        Cell {
+            has_mine: false,
+            adjacent_mines: 0,
+            state: CellState::Hidden,
         }
     }
 }
-
+ 
 // ─── Difficulty ───────────────────────────────────────────────────────────────
-
+ 
 #[derive(Clone)]
 struct Config {
-    larghezza: usize,
-    altezza: usize,
-    num_mine: usize,
+    width: usize,
+    height: usize,
+    num_mines: usize,
 }
-
+ 
 impl Config {
-    fn beginner()     -> Self { Config { larghezza:  9, altezza:  9, num_mine:  10 } }
-    fn intermediate() -> Self { Config { larghezza: 16, altezza: 16, num_mine:  40 } }
-    fn expert()       -> Self { Config { larghezza: 30, altezza: 16, num_mine:  99 } }
+    fn beginner()     -> Self { Config { width:  9, height:  9, num_mines:  10 } }
+    fn intermediate() -> Self { Config { width: 16, height: 16, num_mines:  40 } }
+    fn expert()       -> Self { Config { width: 30, height: 16, num_mines:  99 } }
 }
-
+ 
 // ─── Difficulty menu (runs before raw-mode) ───────────────────────────────────
-
+ 
 /// Shows the menu in normal (cooked) terminal mode so `stdin` line-reading works
 /// cleanly for the custom option. Arrow-key navigation is NOT available here
 /// since we avoid raw mode during input; we use plain numeric entry instead.
-fn mostra_menu() -> io::Result<Config> {
+fn show_menu() -> io::Result<Config> {
     let stdin = io::stdin();
-
+ 
     loop {
         println!();
         println!("╔══════════════════════════════╗");
-        println!("║      CAMPO MINATO – RUST     ║");
+        println!("║      MINESWEEPER – RUST      ║");
         println!("╠══════════════════════════════╣");
-        println!("║  Seleziona difficoltà:       ║");
+        println!("║  Select difficulty:          ║");
         println!("║                              ║");
-        println!("║  1. Principiante  ( 9× 9,10) ║");
-        println!("║  2. Intermedio    (16×16,40) ║");
-        println!("║  3. Esperto       (30×16,99) ║");
-        println!("║  4. Personalizzato           ║");
+        println!("║  1. Beginner      ( 9× 9,10) ║");
+        println!("║  2. Intermediate  (16×16,40) ║");
+        println!("║  3. Expert        (30×16,99) ║");
+//        println!("║  4. Custom                   ║");
         println!("╚══════════════════════════════╝");
-        print!("Scelta [1-4]: ");
+        print!("Choice [1-4]: ");
         io::stdout().flush()?;
-
+ 
         let mut line = String::new();
         stdin.lock().read_line(&mut line)?;
-
+ 
         match line.trim() {
             "1" => return Ok(Config::beginner()),
             "2" => return Ok(Config::intermediate()),
             "3" => return Ok(Config::expert()),
-            "4" => return leggi_config_personalizzata(),
-            _   => println!("Inserisci un numero tra 1 e 4.\n"),
+//            "4" => return read_custom_config(),
+            _   => println!("Please enter a number between 1 and 4.\n"),
         }
     }
 }
-
-fn leggi_u(prompt: &str, min: usize, max: usize) -> io::Result<usize> {
+ 
+/*fn read_uint(prompt: &str, min: usize, max: usize) -> io::Result<usize> {
     let stdin = io::stdin();
     loop {
         print!("{} ({}-{}): ", prompt, min, max);
         io::stdout().flush()?;
-
+ 
         let mut line = String::new();
         stdin.lock().read_line(&mut line)?;
-
+ 
         match line.trim().parse::<usize>() {
             Ok(v) if v >= min && v <= max => return Ok(v),
-            Ok(_) => println!("  Valore fuori intervallo, riprova."),
-            Err(_) => println!("  Inserisci un numero intero valido."),
+            Ok(_) => println!("  Value out of range, please try again."),
+            Err(_) => println!("  Please enter a valid integer."),
         }
     }
 }
-
-fn leggi_config_personalizzata() -> io::Result<Config> {
-    println!("\n--- Configurazione personalizzata ---");
-    let larghezza = leggi_u("Larghezza", 5, 50)?;
-    let altezza   = leggi_u("Altezza",   5, 50)?;
-    let celle_totali = larghezza * altezza;
-    let max_mine  = ((celle_totali as f64) * 0.8) as usize;
-    let num_mine  = leggi_u("Mine", 1, max_mine)?;
-    Ok(Config { larghezza, altezza, num_mine })
-}
-
+ 
+fn read_custom_config() -> io::Result<Config> {
+    println!("\n--- Custom configuration ---");
+    let width  = read_uint("Width",  5, 50)?;
+    let height = read_uint("Height", 5, 50)?;
+    let total_cells = width * height;
+    let max_mines   = ((total_cells as f64) * 0.8) as usize;
+    let num_mines   = read_uint("Mines", 1, max_mines)?;
+    Ok(Config { width, height, num_mines })
+}*/
+ 
 // ─── Game ─────────────────────────────────────────────────────────────────────
-
-struct Gioco {
-    griglia: Vec<Vec<Cella>>,
-    larghezza: usize,
-    altezza: usize,
-    num_mine: usize,
-    cursore_x: usize,
-    cursore_y: usize,
+ 
+struct Game {
+    grid: Vec<Vec<Cell>>,
+    width: usize,
+    height: usize,
+    num_mines: usize,
+    cursor_x: usize,
+    cursor_y: usize,
     game_over: bool,
-    vittoria: bool,
+    victory: bool,
 }
-
-impl Gioco {
-    fn nuovo(cfg: &Config) -> Self {
-        let riga = vec![Cella::default(); cfg.larghezza];
-        let griglia = vec![riga; cfg.altezza];
-        let mut gioco = Gioco {
-            griglia,
-            larghezza: cfg.larghezza,
-            altezza: cfg.altezza,
-            num_mine: cfg.num_mine,
-            cursore_x: 0,
-            cursore_y: 0,
+ 
+impl Game {
+    fn new(cfg: &Config) -> Self {
+        let row = vec![Cell::default(); cfg.width];
+        let grid = vec![row; cfg.height];
+        let mut game = Game {
+            grid,
+            width: cfg.width,
+            height: cfg.height,
+            num_mines: cfg.num_mines,
+            cursor_x: 0,
+            cursor_y: 0,
             game_over: false,
-            vittoria: false,
+            victory: false,
         };
-        gioco.genera_mappa();
-        gioco
+        game.generate_map();
+        game
     }
-
+ 
     // ── LCG PRNG ──────────────────────────────────────────────────────────────
-
-    fn genera_mappa(&mut self) {
+ 
+    fn generate_map(&mut self) {
         let mut seed = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default()
             .as_nanos() as u64;
-
-        let mut mine_piazzate = 0;
-        while mine_piazzate < self.num_mine {
+ 
+        let mut mines_placed = 0;
+        while mines_placed < self.num_mines {
             seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
-            let x = (seed >> 33) as usize % self.larghezza;
+            let x = (seed >> 33) as usize % self.width;
             seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
-            let y = (seed >> 33) as usize % self.altezza;
-
-            if !self.griglia[y][x].ha_mina {
-                self.griglia[y][x].ha_mina = true;
-                mine_piazzate += 1;
+            let y = (seed >> 33) as usize % self.height;
+ 
+            if !self.grid[y][x].has_mine {
+                self.grid[y][x].has_mine = true;
+                mines_placed += 1;
             }
         }
-
-        for y in 0..self.altezza {
-            for x in 0..self.larghezza {
-                if self.griglia[y][x].ha_mina {
+ 
+        for y in 0..self.height {
+            for x in 0..self.width {
+                if self.grid[y][x].has_mine {
                     continue;
                 }
-                let mut contatore: u8 = 0;
+                let mut count: u8 = 0;
                 for dy in -1_isize..=1 {
                     for dx in -1_isize..=1 {
                         let ny = y as isize + dy;
                         let nx = x as isize + dx;
                         if nx >= 0
-                            && nx < self.larghezza as isize
+                            && nx < self.width as isize
                             && ny >= 0
-                            && ny < self.altezza as isize
-                            && self.griglia[ny as usize][nx as usize].ha_mina
+                            && ny < self.height as isize
+                            && self.grid[ny as usize][nx as usize].has_mine
                         {
-                            contatore += 1;
+                            count += 1;
                         }
                     }
                 }
-                self.griglia[y][x].mine_vicine = contatore;
+                self.grid[y][x].adjacent_mines = count;
             }
         }
     }
-
+ 
     // ── Reveal ────────────────────────────────────────────────────────────────
-
-    fn rivela(&mut self, x: usize, y: usize) {
-        if self.griglia[y][x].stato != StatoCella::Coperta {
+ 
+    fn reveal(&mut self, x: usize, y: usize) {
+        if self.grid[y][x].state != CellState::Hidden {
             return;
         }
-        if self.griglia[y][x].ha_mina {
+        if self.grid[y][x].has_mine {
             self.game_over = true;
             // Reveal all mines immediately
-            for ry in 0..self.altezza {
-                for rx in 0..self.larghezza {
-                    if self.griglia[ry][rx].ha_mina {
-                        self.griglia[ry][rx].stato = StatoCella::Rivelata;
+            for ry in 0..self.height {
+                for rx in 0..self.width {
+                    if self.grid[ry][rx].has_mine {
+                        self.grid[ry][rx].state = CellState::Revealed;
                     }
                 }
             }
             return;
         }
-        self.griglia[y][x].stato = StatoCella::Rivelata;
-        if self.griglia[y][x].mine_vicine == 0 {
+        self.grid[y][x].state = CellState::Revealed;
+        if self.grid[y][x].adjacent_mines == 0 {
             for dy in -1_isize..=1 {
                 for dx in -1_isize..=1 {
                     if dy == 0 && dx == 0 {
@@ -217,109 +217,110 @@ impl Gioco {
                     let ny = y as isize + dy;
                     let nx = x as isize + dx;
                     if nx >= 0
-                        && nx < self.larghezza as isize
+                        && nx < self.width as isize
                         && ny >= 0
-                        && ny < self.altezza as isize
+                        && ny < self.height as isize
                     {
-                        self.rivela(nx as usize, ny as usize);
+                        self.reveal(nx as usize, ny as usize);
                     }
                 }
             }
         }
     }
-
-    fn alterna_bandierina(&mut self) {
-        let cella = &mut self.griglia[self.cursore_y][self.cursore_x];
-        match cella.stato {
-            StatoCella::Coperta    => cella.stato = StatoCella::Bandierina,
-            StatoCella::Bandierina => cella.stato = StatoCella::Coperta,
-            StatoCella::Rivelata   => {}
+ 
+    fn toggle_flag(&mut self) {
+        let cell = &mut self.grid[self.cursor_y][self.cursor_x];
+        match cell.state {
+            CellState::Hidden  => cell.state = CellState::Flagged,
+            CellState::Flagged => cell.state = CellState::Hidden,
+            CellState::Revealed => {}
         }
     }
-
-    fn controlla_vittoria(&mut self) {
-        for y in 0..self.altezza {
-            for x in 0..self.larghezza {
-                let c = &self.griglia[y][x];
-                if !c.ha_mina && c.stato != StatoCella::Rivelata {
+ 
+    fn check_victory(&mut self) {
+        for y in 0..self.height {
+            for x in 0..self.width {
+                let c = &self.grid[y][x];
+                if !c.has_mine && c.state != CellState::Revealed {
                     return;
                 }
             }
         }
-        self.vittoria = true;
+        self.victory = true;
     }
-
+ 
     // ── Render ────────────────────────────────────────────────────────────────
-
-    fn disegna(&self) -> io::Result<()> {
+ 
+    fn draw(&self) -> io::Result<()> {
         let mut out = stdout();
         // Move to top-left and overwrite in place — no full clear avoids flicker.
-        // Each line is padded to the terminal width so stale chars are overwritten.
+        // Each line is cleared before writing so stale chars are erased.
         execute!(out, cursor::MoveTo(0, 0))?;
-
+ 
         // Title bar
         execute!(out, SetForegroundColor(Color::Cyan))?;
         execute!(out, terminal::Clear(ClearType::CurrentLine))?;
-        println!("╔══ CAMPO MINATO IN RUST ══╗");
+        println!("╔══ MINESWEEPER – RUST ══╗");
         execute!(out, ResetColor)?;
-
+ 
         // Controls hint
         execute!(out, SetForegroundColor(Color::DarkGrey))?;
         execute!(out, terminal::Clear(ClearType::CurrentLine))?;
-        println!("  ↑↓←→ muovi  [INVIO] rivela  [SPAZIO] bandierina  [Q] esci");
+        println!("  ↑↓←→ move  [ENTER] reveal  [SPACE] flag  [Q] quit");
         execute!(out, ResetColor)?;
-
-        // Mine counter
-        let bandiere: usize = self
-            .griglia
+ 
+        // Mine / flag counter
+        let flags: usize = self
+            .grid
             .iter()
             .flat_map(|r| r.iter())
-            .filter(|c| c.stato == StatoCella::Bandierina)
+            .filter(|c| c.state == CellState::Flagged)
             .count();
         execute!(out, SetForegroundColor(Color::Yellow))?;
-        println!("  Mine: {}  Bandiere: {}\n", self.num_mine, bandiere);
+        execute!(out, terminal::Clear(ClearType::CurrentLine))?;
+        println!("  Mines: {}  Flags: {}\n", self.num_mines, flags);
         execute!(out, ResetColor)?;
-
+ 
         // Grid
-        for y in 0..self.altezza {
+        for y in 0..self.height {
             execute!(out, terminal::Clear(ClearType::CurrentLine))?;
             print!("  ");
-            for x in 0..self.larghezza {
-                let cella = &self.griglia[y][x];
-                let is_cursore = x == self.cursore_x && y == self.cursore_y;
-
-                if is_cursore {
+            for x in 0..self.width {
+                let cell = &self.grid[y][x];
+                let is_cursor = x == self.cursor_x && y == self.cursor_y;
+ 
+                if is_cursor {
                     execute!(
                         out,
                         SetForegroundColor(Color::Black),
                         SetBackgroundColor(Color::White)
                     )?;
                 }
-
-                match cella.stato {
-                    StatoCella::Coperta => {
-                        if !is_cursore {
+ 
+                match cell.state {
+                    CellState::Hidden => {
+                        if !is_cursor {
                             execute!(out, SetForegroundColor(Color::DarkGrey))?;
                         }
                         print!(" . ");
                     }
-                    StatoCella::Bandierina => {
-                        if !is_cursore {
+                    CellState::Flagged => {
+                        if !is_cursor {
                             execute!(out, SetForegroundColor(Color::Yellow))?;
                         }
                         print!(" P ");
                     }
-                    StatoCella::Rivelata => {
-                        if cella.ha_mina {
+                    CellState::Revealed => {
+                        if cell.has_mine {
                             execute!(out, SetForegroundColor(Color::Red))?;
                             print!(" * ");
-                        } else if cella.mine_vicine == 0 {
-                            if !is_cursore {
+                        } else if cell.adjacent_mines == 0 {
+                            if !is_cursor {
                                 execute!(out, SetForegroundColor(Color::DarkGreen))?;
                             }
                             print!("   ");
                         } else {
-                            let colore = match cella.mine_vicine {
+                            let color = match cell.adjacent_mines {
                                 1 => Color::Blue,
                                 2 => Color::Green,
                                 3 => Color::Red,
@@ -329,26 +330,26 @@ impl Gioco {
                                 7 => Color::Magenta,
                                 _ => Color::White,
                             };
-                            if !is_cursore {
-                                execute!(out, SetForegroundColor(colore))?;
+                            if !is_cursor {
+                                execute!(out, SetForegroundColor(color))?;
                             }
-                            print!(" {} ", cella.mine_vicine);
+                            print!(" {} ", cell.adjacent_mines);
                         }
                     }
                 }
-
-                if is_cursore {
+ 
+                if is_cursor {
                     execute!(out, ResetColor)?;
                 }
             }
             println!();
         }
-
+ 
         execute!(out, ResetColor)?;
-
+ 
         // Clear any leftover lines below the grid (e.g. old banners after resize)
         execute!(out, terminal::Clear(ClearType::CurrentLine))?;
-
+ 
         // Status message
         if self.game_over {
             println!();
@@ -360,120 +361,122 @@ impl Gioco {
             println!("  ██████╔╝╚██████╔╝╚██████╔╝██║ ╚═╝ ██║");
             println!("  ╚═════╝  ╚═════╝  ╚═════╝ ╚═╝     ╚═╝");
             println!();
-            println!("  BOOM! Hai calpestato una mina.");
+            println!("  BOOM! You stepped on a mine.");
             execute!(out, SetForegroundColor(Color::DarkGrey))?;
-            println!("  [INVIO] Rivinci  |  [M] Menu  |  [Q] Esci");
+            println!("  [ENTER] Play again  |  [M] Menu  |  [Q] Quit");
             execute!(out, ResetColor)?;
-        } else if self.vittoria {
+        } else if self.victory {
             println!();
             execute!(out, SetForegroundColor(Color::Green))?;
-            println!("  ██╗   ██╗██╗████████╗████████╗ ██████╗ ██████╗ ██╗ █████╗ ██╗");
-            println!("  ██║   ██║██║╚══██╔══╝╚══██╔══╝██╔═══██╗██╔══██╗██║██╔══██╗██║");
-            println!("  ██║   ██║██║   ██║      ██║   ██║   ██║██████╔╝██║███████║██║");
-            println!("  ╚██╗ ██╔╝██║   ██║      ██║   ██║   ██║██╔══██╗██║██╔══██║╚═╝");
-            println!("   ╚████╔╝ ██║   ██║      ██║   ╚██████╔╝██║  ██║██║██║  ██║██╗");
-            println!("    ╚═══╝  ╚═╝   ╚═╝      ╚═╝    ╚═════╝ ╚═╝  ╚═╝╚═╝╚═╝  ╚═╝╚═╝");
+            println!("  ██╗   ██╗██╗ ██████╗████████╗ ██████╗ ██████╗ ██╗   ██╗██╗");
+            println!("  ██║   ██║██║██╔════╝╚══██╔══╝██╔═══██╗██╔══██╗╚██╗ ██╔╝██║");
+            println!("  ██║   ██║██║██║        ██║   ██║   ██║██████╔╝ ╚████╔╝ ██║");
+            println!("  ╚██╗ ██╔╝██║██║        ██║   ██║   ██║██╔══██╗  ╚██╔╝  ╚═╝");
+            println!("   ╚████╔╝ ██║╚██████╗   ██║   ╚██████╔╝██║  ██║   ██║   ██╗");
+            println!("    ╚═══╝  ╚═╝ ╚═════╝   ╚═╝    ╚═════╝ ╚═╝  ╚═╝   ╚═╝   ╚═╝");
             println!();
-            println!("  Complimenti! Hai ripulito il campo minato!");
+            println!("  Congratulations! You cleared the minefield!");
             execute!(out, SetForegroundColor(Color::DarkGrey))?;
-            println!("  [INVIO] Rivinci  |  [M] Menu  |  [Q] Esci");
+            println!("  [ENTER] Play again  |  [M] Menu  |  [Q] Quit");
             execute!(out, ResetColor)?;
         }
-
+ 
         out.flush()?;
         Ok(())
     }
 }
-
+ 
 // ─── Post-game action ────────────────────────────────────────────────────────
-
-enum AzioneFinale {
-    Rivinci,   // same config, new board
-    Menu,      // go back to difficulty menu
-    Esci,      // quit
+ 
+enum PostGameAction {
+    PlayAgain,  // same config, new board
+    Menu,       // go back to difficulty menu
+    Quit,       // exit the program
 }
-
-// ─── Main ─────────────────────────────────────────────────────────────────────
-
+ 
+// ─── Session ─────────────────────────────────────────────────────────────────
+ 
 /// Runs one full game session (raw mode already active).
 /// Returns what the player wants to do next.
-fn gioca(cfg: &Config) -> io::Result<AzioneFinale> {
+fn play(cfg: &Config) -> io::Result<PostGameAction> {
     let mut stdout = stdout();
     execute!(stdout, Clear(ClearType::All))?;
-
-    let mut gioco = Gioco::nuovo(cfg);
-
+ 
+    let mut game = Game::new(cfg);
+ 
     // Drain stale events (Enter from menu or previous session end).
     while event::poll(Duration::from_millis(0))? {
         let _ = event::read()?;
     }
-
-    gioco.disegna()?;
+ 
+    game.draw()?;
     loop {
-        if gioco.game_over || gioco.vittoria {
+        if game.game_over || game.victory {
             // Board frozen — wait for a decisive keypress.
             loop {
                 if event::poll(Duration::from_millis(200))? {
                     if let Event::Key(ke) = event::read()? {
                         if ke.kind != KeyEventKind::Press { continue; }
                         match ke.code {
-                            KeyCode::Enter                              => return Ok(AzioneFinale::Rivinci),
-                            KeyCode::Char('m') | KeyCode::Char('M')   => return Ok(AzioneFinale::Menu),
-                            KeyCode::Char('q') | KeyCode::Char('Q')   => return Ok(AzioneFinale::Esci),
+                            KeyCode::Enter                            => return Ok(PostGameAction::PlayAgain),
+                            KeyCode::Char('m') | KeyCode::Char('M') => return Ok(PostGameAction::Menu),
+                            KeyCode::Char('q') | KeyCode::Char('Q') => return Ok(PostGameAction::Quit),
                             _ => {}
                         }
                     }
                 }
             }
         }
-
+ 
         if event::poll(Duration::from_millis(50))? {
             if let Event::Key(ke) = event::read()? {
                 if ke.kind != KeyEventKind::Press { continue; }
                 match ke.code {
-                    KeyCode::Up    => { if gioco.cursore_y > 0                  { gioco.cursore_y -= 1; } }
-                    KeyCode::Down  => { if gioco.cursore_y < gioco.altezza - 1  { gioco.cursore_y += 1; } }
-                    KeyCode::Left  => { if gioco.cursore_x > 0                  { gioco.cursore_x -= 1; } }
-                    KeyCode::Right => { if gioco.cursore_x < gioco.larghezza - 1{ gioco.cursore_x += 1; } }
+                    KeyCode::Up    => { if game.cursor_y > 0               { game.cursor_y -= 1; } }
+                    KeyCode::Down  => { if game.cursor_y < game.height - 1 { game.cursor_y += 1; } }
+                    KeyCode::Left  => { if game.cursor_x > 0               { game.cursor_x -= 1; } }
+                    KeyCode::Right => { if game.cursor_x < game.width - 1  { game.cursor_x += 1; } }
                     KeyCode::Enter => {
-                        gioco.rivela(gioco.cursore_x, gioco.cursore_y);
-                        gioco.controlla_vittoria();
+                        game.reveal(game.cursor_x, game.cursor_y);
+                        game.check_victory();
                     }
-                    KeyCode::Char(' ') => { gioco.alterna_bandierina(); }
-                    KeyCode::Char('q') | KeyCode::Char('Q') => return Ok(AzioneFinale::Esci),
+                    KeyCode::Char(' ') => { game.toggle_flag(); }
+                    KeyCode::Char('q') | KeyCode::Char('Q') => return Ok(PostGameAction::Quit),
                     _ => {}
                 }
-                gioco.disegna()?;
+                game.draw()?;
             }
         }
     }
 }
-
+ 
+// ─── Main ─────────────────────────────────────────────────────────────────────
+ 
 fn main() -> io::Result<()> {
     'app: loop {
         // ── Menu (cooked mode) ────────────────────────────────────────────────
-        let cfg = mostra_menu()?;
-
+        let cfg = show_menu()?;
+ 
         // ── Enter raw / alternate-screen mode ─────────────────────────────────
         terminal::enable_raw_mode()?;
         let mut stdout = stdout();
         execute!(stdout, terminal::EnterAlternateScreen, cursor::Hide)?;
-
+ 
         // ── Session loop: replay without returning to menu ─────────────────────
-        let azione = loop {
-            match gioca(&cfg)? {
-                AzioneFinale::Rivinci => continue,          // same config, new board
-                other                 => break other,       // Menu or Esci
+        let action = loop {
+            match play(&cfg)? {
+                PostGameAction::PlayAgain => continue,  // same config, new board
+                other                     => break other,
             }
         };
-
+ 
         // ── Restore terminal ──────────────────────────────────────────────────
         execute!(stdout, cursor::Show, terminal::LeaveAlternateScreen)?;
         terminal::disable_raw_mode()?;
-
-        match azione {
-            AzioneFinale::Menu => continue 'app,
-            _                  => break 'app,              // Esci
+ 
+        match action {
+            PostGameAction::Menu => continue 'app,
+            _                    => break 'app,  // Quit
         }
     }
     Ok(())
