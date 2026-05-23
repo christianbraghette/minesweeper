@@ -44,41 +44,77 @@ struct Config {
 }
 
 impl Config {
-    fn beginner() -> Self {
-        Config {
-            width: 9,
-            height: 9,
-            num_mines: 10,
-        }
-    }
-    fn intermediate() -> Self {
-        Config {
-            width: 16,
-            height: 16,
-            num_mines: 40,
-        }
-    }
-    fn expert() -> Self {
-        Config {
-            width: 30,
-            height: 16,
-            num_mines: 99,
-        }
-    }
-    fn tryhard() -> Self {
-        Config {
-            width: 30,
-            height: 20,
-            num_mines: 140,
-        }
-    }
-    fn extreme() -> Self {
-        Config {
-            width: 30,
-            height: 24,
-            num_mines: 200,
-        }
-    }
+    fn beginner()     -> Self { Config { width:  9, height:  9, num_mines:  10 } }
+    fn intermediate() -> Self { Config { width: 16, height: 16, num_mines:  40 } }
+    fn expert()       -> Self { Config { width: 30, height: 16, num_mines:  99 } }
+    fn tryhard()      -> Self { Config { width: 30, height: 20, num_mines: 140 } }
+    fn extreme()      -> Self { Config { width: 30, height: 24, num_mines: 200 } }
+}
+
+// ─── Terminal resolution tiers ───────────────────────────────────────────────
+//
+// We map the real terminal size onto one of five named tiers inspired by the
+// classic retro resolutions the user asked for.  The tiers drive how much of
+// the terminal we can actually use for the grid.
+//
+//  Tier │ Min cols │ Min rows │ Reference resolution
+//  ─────┼──────────┼──────────┼─────────────────────
+//    1  │    0     │    0     │  160 × 120  (tiny device, e.g. R36S)
+//    2  │  160     │   45     │  240 × 160
+//    3  │  240     │   50     │  320 × 200
+//    4  │  320     │   55     │  640 × 350
+//    5  │  640     │   60     │  640 × 480
+//
+// Each cell is rendered as 3 columns wide and 1 row tall.
+// Overhead consumed by the UI:
+//   - cols: 2 (left pad) + 2 (border ║ on each side)  = 4
+//   - rows: 1 (title) + 1 (controls) + 1 (counter) + 1 (blank)
+//           + 2 (top/bottom border) + 1 (blank) + 3 (status) = ~10
+//
+// max_grid_width  = (term_cols - 4) / 3
+// max_grid_height = term_rows - 10   (clamped to ≥ 1)
+
+#[derive(Debug, Clone, Copy)]
+struct TerminalTier {
+    /// Maximum grid columns available in this tier
+    max_grid_w: usize,
+    /// Maximum grid rows available in this tier
+    max_grid_h: usize,
+}
+
+fn detect_tier() -> TerminalTier {
+    // terminal::size() returns (columns, rows)
+    let (cols, rows) = terminal::size().unwrap_or((80, 24));
+    let (cols, rows) = (cols as usize, rows as usize);
+
+    // UI overhead (see comment above)
+    let col_overhead  = 4_usize;   // left pad + two border chars
+    let row_overhead  = 10_usize;  // title + hint + counter + borders + status
+
+    let max_grid_w = ((cols.saturating_sub(col_overhead)) / 3).max(1);
+    let max_grid_h = rows.saturating_sub(row_overhead).max(1);
+
+    TerminalTier { max_grid_w, max_grid_h }
+}
+
+/// Clamp a Config so it fits inside the detected terminal tier.
+/// Mines are rescaled to preserve the original density as closely as possible.
+fn fit_config(cfg: &Config) -> Config {
+    let tier = detect_tier();
+
+    let new_w = cfg.width.min(tier.max_grid_w).max(1);
+    let new_h = cfg.height.min(tier.max_grid_h).max(1);
+
+    // Rescale mine count by the ratio of available cells, keeping density.
+    let original_cells = (cfg.width * cfg.height) as f64;
+    let new_cells      = (new_w    * new_h)       as f64;
+    let density        = cfg.num_mines as f64 / original_cells;
+    // At least 1 mine; at most 80 % of cells to keep the game playable.
+    let new_mines = ((density * new_cells).round() as usize)
+        .max(1)
+        .min(((new_cells * 0.8) as usize).max(1));
+
+    Config { width: new_w, height: new_h, num_mines: new_mines }
 }
 
 // ─── Difficulty menu (runs before raw-mode) ───────────────────────────────────
@@ -91,17 +127,17 @@ fn show_menu() -> io::Result<Config> {
 
     loop {
         println!();
-        println!("╔══════════════════════════════╗");
-        println!("║      MINESWEEPER – RUST      ║");
-        println!("╠══════════════════════════════╣");
-        println!("║  Select difficulty:          ║");
-        println!("║                              ║");
-        println!("║  1. Beginner     ( 9× 9, 10) ║");
-        println!("║  2. Intermediate (16×16, 40) ║");
-        println!("║  3. Expert       (30×16, 99) ║");
-        println!("║  4. Tryhard      (30×20,140) ║");
-        println!("║  5. Extreme      (30×24,200) ║");
-        println!("╚══════════════════════════════╝");
+        println!("╔════════════════════════════════════════════╗");
+        println!("║           MINESWEEPER – RUST               ║");
+        println!("╠════════════════════════════════════════════╣");
+        println!("║  Select difficulty:                        ║");
+        println!("║                                            ║");
+        println!("║  1. Beginner      ( 9× 9, 10) ~12.3%      ║");
+        println!("║  2. Intermediate  (16×16, 40) ~15.6%      ║");
+        println!("║  3. Expert        (30×16, 99) ~20.6%      ║");
+        println!("║  4. Tryhard       (30×20,140) ~23.3%      ║");
+        println!("║  5. Extreme       (30×24,200) ~27.7%      ║");
+        println!("╚════════════════════════════════════════════╝");
         print!("Choice [1-5]: ");
         io::stdout().flush()?;
 
@@ -114,7 +150,7 @@ fn show_menu() -> io::Result<Config> {
             "3" => return Ok(Config::expert()),
             "4" => return Ok(Config::tryhard()),
             "5" => return Ok(Config::extreme()),
-            _ => println!("Please enter a number between 1 and 5.\n"),
+            _   => println!("Please enter a number between 1 and 5.\n"),
         }
     }
 }
@@ -126,6 +162,9 @@ struct Game {
     width: usize,
     height: usize,
     num_mines: usize,
+    /// Original (pre-fit) dimensions — used to show a "scaled" notice.
+    original_width: usize,
+    original_height: usize,
     cursor_x: usize,
     cursor_y: usize,
     game_over: bool,
@@ -141,12 +180,23 @@ impl Game {
             width: cfg.width,
             height: cfg.height,
             num_mines: cfg.num_mines,
+            original_width: cfg.width,
+            original_height: cfg.height,
             cursor_x: 0,
             cursor_y: 0,
             game_over: false,
             victory: false,
         };
         game.generate_map();
+        game
+    }
+
+    /// Variant used by `play()` which knows both the user's requested size and
+    /// the fitted (clamped) size.  Stores the original for the scaled notice.
+    fn new_fitted(original: &Config, fitted: &Config) -> Self {
+        let mut game = Self::new(fitted);
+        game.original_width  = original.width;
+        game.original_height = original.height;
         game
     }
 
@@ -160,13 +210,9 @@ impl Game {
 
         let mut mines_placed = 0;
         while mines_placed < self.num_mines {
-            seed = seed
-                .wrapping_mul(6364136223846793005)
-                .wrapping_add(1442695040888963407);
+            seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
             let x = (seed >> 33) as usize % self.width;
-            seed = seed
-                .wrapping_mul(6364136223846793005)
-                .wrapping_add(1442695040888963407);
+            seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
             let y = (seed >> 33) as usize % self.height;
 
             if !self.grid[y][x].has_mine {
@@ -227,7 +273,11 @@ impl Game {
                     }
                     let ny = y as isize + dy;
                     let nx = x as isize + dx;
-                    if nx >= 0 && nx < self.width as isize && ny >= 0 && ny < self.height as isize {
+                    if nx >= 0
+                        && nx < self.width as isize
+                        && ny >= 0
+                        && ny < self.height as isize
+                    {
                         self.reveal(nx as usize, ny as usize);
                     }
                 }
@@ -238,7 +288,7 @@ impl Game {
     fn toggle_flag(&mut self) {
         let cell = &mut self.grid[self.cursor_y][self.cursor_x];
         match cell.state {
-            CellState::Hidden => cell.state = CellState::Flagged,
+            CellState::Hidden  => cell.state = CellState::Flagged,
             CellState::Flagged => cell.state = CellState::Hidden,
             CellState::Revealed => {}
         }
@@ -285,7 +335,21 @@ impl Game {
             .count();
         execute!(out, SetForegroundColor(Color::Yellow))?;
         execute!(out, terminal::Clear(ClearType::CurrentLine))?;
-        println!("  Mines: {}  Flags: {}\n", self.num_mines, flags);
+        println!("  Mines: {}  Flags: {}", self.num_mines, flags);
+        execute!(out, ResetColor)?;
+
+        // If the grid was clamped to fit the terminal, show a notice.
+        execute!(out, terminal::Clear(ClearType::CurrentLine))?;
+        if self.width != self.original_width || self.height != self.original_height {
+            execute!(out, SetForegroundColor(Color::DarkYellow))?;
+            println!(
+                "  ⚠ Scaled {}×{} → {}×{} to fit terminal",
+                self.original_width, self.original_height,
+                self.width, self.height
+            );
+        } else {
+            println!(); // keep vertical layout stable when no notice is shown
+        }
         execute!(out, ResetColor)?;
 
         // Grid — surrounded by a box border
@@ -419,9 +483,9 @@ impl Game {
 // ─── Post-game action ────────────────────────────────────────────────────────
 
 enum PostGameAction {
-    PlayAgain, // same config, new board
-    Menu,      // go back to difficulty menu
-    Quit,      // exit the program
+    PlayAgain,  // same config, new board
+    Menu,       // go back to difficulty menu
+    Quit,       // exit the program
 }
 
 // ─── Session ─────────────────────────────────────────────────────────────────
@@ -432,7 +496,10 @@ fn play(cfg: &Config) -> io::Result<PostGameAction> {
     let mut stdout = stdout();
     execute!(stdout, Clear(ClearType::All))?;
 
-    let mut game = Game::new(cfg);
+    // Clamp the grid to whatever the terminal can actually display.
+    let fitted = fit_config(cfg);
+
+    let mut game = Game::new_fitted(cfg, &fitted);
 
     // Drain stale events (Enter from menu or previous session end).
     while event::poll(Duration::from_millis(0))? {
@@ -446,17 +513,11 @@ fn play(cfg: &Config) -> io::Result<PostGameAction> {
             loop {
                 if event::poll(Duration::from_millis(200))? {
                     if let Event::Key(ke) = event::read()? {
-                        if ke.kind != KeyEventKind::Press {
-                            continue;
-                        }
+                        if ke.kind != KeyEventKind::Press { continue; }
                         match ke.code {
-                            KeyCode::Enter => return Ok(PostGameAction::PlayAgain),
-                            KeyCode::Char('m') | KeyCode::Char('M') => {
-                                return Ok(PostGameAction::Menu);
-                            }
-                            KeyCode::Char('q') | KeyCode::Char('Q') => {
-                                return Ok(PostGameAction::Quit);
-                            }
+                            KeyCode::Enter                            => return Ok(PostGameAction::PlayAgain),
+                            KeyCode::Char('m') | KeyCode::Char('M') => return Ok(PostGameAction::Menu),
+                            KeyCode::Char('q') | KeyCode::Char('Q') => return Ok(PostGameAction::Quit),
                             _ => {}
                         }
                     }
@@ -466,37 +527,17 @@ fn play(cfg: &Config) -> io::Result<PostGameAction> {
 
         if event::poll(Duration::from_millis(50))? {
             if let Event::Key(ke) = event::read()? {
-                if ke.kind != KeyEventKind::Press {
-                    continue;
-                }
+                if ke.kind != KeyEventKind::Press { continue; }
                 match ke.code {
-                    KeyCode::Up => {
-                        if game.cursor_y > 0 {
-                            game.cursor_y -= 1;
-                        }
-                    }
-                    KeyCode::Down => {
-                        if game.cursor_y < game.height - 1 {
-                            game.cursor_y += 1;
-                        }
-                    }
-                    KeyCode::Left => {
-                        if game.cursor_x > 0 {
-                            game.cursor_x -= 1;
-                        }
-                    }
-                    KeyCode::Right => {
-                        if game.cursor_x < game.width - 1 {
-                            game.cursor_x += 1;
-                        }
-                    }
+                    KeyCode::Up    => { if game.cursor_y > 0               { game.cursor_y -= 1; } }
+                    KeyCode::Down  => { if game.cursor_y < game.height - 1 { game.cursor_y += 1; } }
+                    KeyCode::Left  => { if game.cursor_x > 0               { game.cursor_x -= 1; } }
+                    KeyCode::Right => { if game.cursor_x < game.width - 1  { game.cursor_x += 1; } }
                     KeyCode::Enter => {
                         game.reveal(game.cursor_x, game.cursor_y);
                         game.check_victory();
                     }
-                    KeyCode::Char(' ') => {
-                        game.toggle_flag();
-                    }
+                    KeyCode::Char(' ') => { game.toggle_flag(); }
                     KeyCode::Char('q') | KeyCode::Char('Q') => return Ok(PostGameAction::Quit),
                     _ => {}
                 }
@@ -521,8 +562,8 @@ fn main() -> io::Result<()> {
         // ── Session loop: replay without returning to menu ─────────────────────
         let action = loop {
             match play(&cfg)? {
-                PostGameAction::PlayAgain => continue, // same config, new board
-                other => break other,
+                PostGameAction::PlayAgain => continue,  // same config, new board
+                other                     => break other,
             }
         };
 
@@ -532,7 +573,7 @@ fn main() -> io::Result<()> {
 
         match action {
             PostGameAction::Menu => continue 'app,
-            _ => break 'app, // Quit
+            _                    => break 'app,  // Quit
         }
     }
     Ok(())
