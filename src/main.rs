@@ -243,8 +243,14 @@ impl Game {
     fn toggle_flag(&mut self) {
         let cell = &mut self.grid[self.cursor_y][self.cursor_x];
         match cell.state {
-            CellState::Hidden => cell.state = CellState::Flagged,
-            CellState::Flagged => cell.state = CellState::Hidden,
+            CellState::Hidden => {
+                cell.state = CellState::Flagged;
+                self.num_mines -= 1;
+            }
+            CellState::Flagged => {
+                cell.state = CellState::Hidden;
+                self.num_mines += 1;
+            }
             CellState::Revealed => {}
         }
     }
@@ -263,6 +269,14 @@ impl Game {
 
     // ── Render ────────────────────────────────────────────────────────────────
 
+    // Each cell is rendered as 3 columns wide and 1 row tall.
+    // Overhead consumed by the UI:
+    //   - cols: 2 (left pad) + 2 (border ║ on each side)  = 4
+    //   - rows: 1 (title) + 1 (controls) + 1 (counter) + 1 (blank)
+    //           + 2 (top/bottom border) = ~6
+    //
+    // max_grid_width  = (term_cols - 4) / 3
+    // max_grid_height = term_rows - 10   (clamped to ≥ 1)
     fn viewport_size(&self) -> (usize, usize) {
         // terminal::size() returns (columns, rows)
         let (cols, rows) = terminal::size().unwrap_or((80, 24));
@@ -270,7 +284,7 @@ impl Game {
 
         // UI overhead (see comment above)
         let col_overhead = 4_usize; // left pad + two border chars
-        let row_overhead = 10_usize; // title + hint + counter + borders + status
+        let row_overhead = 6_usize; // title + hint + counter + borders
 
         let max_grid_w = ((cols.saturating_sub(col_overhead)) / 3).max(1);
         let max_grid_h = rows.saturating_sub(row_overhead).max(1);
@@ -282,25 +296,21 @@ impl Game {
     fn update_camera(&mut self) {
         let (view_w, view_h) = self.viewport_size();
 
-        // Se il cursore va oltre il bordo destro della telecamera
+        // Spostamento a destra/sinistra
         if self.cursor_x >= self.camera_x + view_w {
             self.camera_x = self.cursor_x - view_w + 1;
-        }
-        // Se il cursore va a sinistra della telecamera
-        if self.cursor_x < self.camera_x {
+        } else if self.cursor_x < self.camera_x {
             self.camera_x = self.cursor_x;
         }
 
-        // Se il cursore va sotto il bordo inferiore della telecamera
+        // Spostamento in basso/in alto
         if self.cursor_y >= self.camera_y + view_h {
             self.camera_y = self.cursor_y - view_h + 1;
-        }
-        // Se il cursore va sopra la telecamera
-        if self.cursor_y < self.camera_y {
+        } else if self.cursor_y < self.camera_y {
             self.camera_y = self.cursor_y;
         }
 
-        // Ulteriore sicurezza: blocca la telecamera ai confini massimi della mappa
+        // Vincola la telecamera ai confini della griglia
         if self.camera_x + view_w > self.width {
             self.camera_x = self.width.saturating_sub(view_w);
         }
@@ -327,56 +337,64 @@ impl Game {
         println!("  ↑↓←→ move  [ENTER] reveal  [SPACE] flag  [Q] quit");
         execute!(out, ResetColor)?;
 
-        // Mine / flag counter
-        let flags: usize = self
-            .grid
-            .iter()
-            .flat_map(|r| r.iter())
-            .filter(|c| c.state == CellState::Flagged)
-            .count();
         execute!(out, SetForegroundColor(Color::Yellow))?;
         execute!(out, terminal::Clear(ClearType::CurrentLine))?;
-        println!("  Mines: {}  Flags: {}", self.num_mines, flags);
+        println!("  Mines: {}", self.num_mines);
         execute!(out, ResetColor)?;
 
+        // Spazio vuoto o info di scorrimento
+        /*execute!(out, terminal::Clear(ClearType::CurrentLine))?;
+        println!("  ({}, {})", self.cursor_x, self.cursor_y);
+        execute!(out, ResetColor)?;*/
+
+        // ─── Calcolo dimensioni Finestra Visibile ─────────────────────────────────
         let (max_w, max_h) = self.viewport_size();
         let view_w = max_w.min(self.width);
         let view_h = max_h.min(self.height);
 
-        // Top border
-        execute!(out, terminal::Clear(ClearType::CurrentLine))?;
-        if self.width > view_w || self.height > view_h {
-            execute!(out, SetForegroundColor(Color::DarkYellow))?;
-            println!(
-                "  ⬈ Mappa estesa: usa le frecce per scorrere ({}/{})",
-                self.cursor_x, self.cursor_y
-            );
-        } else {
-            println!();
+        let border_color = Color::DarkGrey;
+
+        // ─── BORDO SUPERIORE DINAMICO ─────────────────────────────────────────────
+        // Compare SOLO se la telecamera include la prima riga della mappa (y = 0)
+        if self.camera_y == 0 {
+            execute!(
+                out,
+                terminal::Clear(ClearType::CurrentLine),
+                SetForegroundColor(border_color)
+            )?;
+            print!("  ");
+            if self.camera_x == 0 {
+                print!("╔");
+            } else {
+                print!("═");
+            }
+            print!("{}", "═".repeat(view_w * 3));
+            if self.camera_x + view_w >= self.width {
+                println!("╗");
+            } else {
+                println!("═");
+            }
         }
-        execute!(out, ResetColor)?;
 
-        let inner_width = view_w * 3;
-        let border_color = Color::DarkRed;
-
-        // Top border
-        execute!(out, terminal::Clear(ClearType::CurrentLine))?;
-        execute!(out, SetForegroundColor(border_color))?;
-        print!("  ╔");
-        print!("{}", "═".repeat(inner_width));
-        println!("╗");
-
-        // DISEGNO DELLA FINESTRA VISIBILE
+        // ─── RENDERING DELLE RIGHE ────────────────────────────────────────────────
         for y_offset in 0..view_h {
-            let y = self.camera_y + y_offset; // Coordinata reale sulla griglia
-
+            let y = self.camera_y + y_offset;
             execute!(out, terminal::Clear(ClearType::CurrentLine))?;
-            execute!(out, SetForegroundColor(border_color))?;
-            print!("  ║");
 
+            // Spaziatura iniziale per allineamento grafico
+            print!("  ");
+
+            // BORDO SINISTRO DINAMICO: compare solo se siamo alla colonna reale 0
+            if self.camera_x == 0 {
+                execute!(out, SetForegroundColor(border_color))?;
+                print!("║");
+            } else {
+                print!(" "); // Spazio vuoto se il bordo è fuori schermo
+            }
+
+            // Disegno delle celle visibili in questa riga
             for x_offset in 0..view_w {
-                let x = self.camera_x + x_offset; // Coordinata reale sulla griglia
-
+                let x = self.camera_x + x_offset;
                 let cell = &self.grid[y][x];
                 let is_cursor = x == self.cursor_x && y == self.cursor_y;
 
@@ -388,6 +406,7 @@ impl Game {
                     )?;
                 }
 
+                // Logica di rendering della cella (Invariata)
                 match cell.state {
                     CellState::Hidden => {
                         if !is_cursor {
@@ -399,16 +418,13 @@ impl Game {
                         if !is_cursor {
                             execute!(out, SetForegroundColor(Color::Yellow))?;
                         }
-                        print!(" P ");
+                        print!(" F ");
                     }
                     CellState::Revealed => {
                         if cell.has_mine {
                             execute!(out, SetForegroundColor(Color::Red))?;
                             print!(" * ");
                         } else if cell.adjacent_mines == 0 {
-                            if !is_cursor {
-                                execute!(out, SetForegroundColor(Color::DarkGreen))?;
-                            }
                             print!("   ");
                         } else {
                             let color = match cell.adjacent_mines {
@@ -419,6 +435,7 @@ impl Game {
                                 5 => Color::DarkRed,
                                 6 => Color::Cyan,
                                 7 => Color::Magenta,
+                                8 => Color::DarkMagenta,
                                 _ => Color::White,
                             };
                             if !is_cursor {
@@ -434,20 +451,38 @@ impl Game {
                 }
             }
 
-            // Right border
-            execute!(out, SetForegroundColor(border_color))?;
-            println!("║");
+            // BORDO DESTRO DINAMICO: compare solo se siamo arrivati all'ultima colonna reale della mappa
+            if self.camera_x + view_w >= self.width {
+                execute!(out, SetForegroundColor(border_color))?;
+                println!("║");
+            } else {
+                println!(); // Lascia scorrere senza visualizzare il muro destro
+            }
         }
 
-        // Bottom border
-        execute!(out, terminal::Clear(ClearType::CurrentLine))?;
-        execute!(out, SetForegroundColor(border_color))?;
-        print!("  ╚");
-        print!("{}", "═".repeat(inner_width));
-        println!("╝");
+        // ─── BORDO INFERIORE DINAMICO ─────────────────────────────────────────────
+        // Compare SOLO se la telecamera include l'ultima riga della mappa
+        if self.camera_y + view_h >= self.height {
+            execute!(
+                out,
+                terminal::Clear(ClearType::CurrentLine),
+                SetForegroundColor(border_color)
+            )?;
+            print!("  ");
+            if self.camera_x == 0 {
+                print!("╚");
+            } else {
+                print!("═");
+            }
+            print!("{}", "═".repeat(view_w * 3));
+            if self.camera_x + view_w >= self.width {
+                println!("╝");
+            } else {
+                println!("═");
+            }
+        }
 
         execute!(out, ResetColor)?;
-
         // Clear any leftover lines below the grid (e.g. old banners after resize)
         execute!(out, terminal::Clear(ClearType::CurrentLine))?;
 
@@ -510,70 +545,90 @@ fn play(cfg: &Config) -> io::Result<PostGameAction> {
         let _ = event::read()?;
     }
 
+    game.update_camera();
     game.draw()?;
     loop {
         if game.game_over || game.victory {
             // Board frozen — wait for a decisive keypress.
             loop {
                 if event::poll(Duration::from_millis(200))? {
-                    if let Event::Key(ke) = event::read()? {
-                        if ke.kind != KeyEventKind::Press {
-                            continue;
+                    match event::read()? {
+                        // Se l'utente ridimensiona la finestra a partita finita
+                        Event::Resize(_, _) => {
+                            execute!(stdout, Clear(ClearType::All))?; // Pulisce i vecchi artefatti grafici
+                            game.update_camera();
+                            game.draw()?;
                         }
-                        match ke.code {
-                            KeyCode::Enter => return Ok(PostGameAction::PlayAgain),
-                            KeyCode::Char('m') | KeyCode::Char('M') => {
-                                return Ok(PostGameAction::Menu);
+                        Event::Key(ke) => {
+                            if ke.kind != KeyEventKind::Press {
+                                continue;
                             }
-                            KeyCode::Char('q') | KeyCode::Char('Q') => {
-                                return Ok(PostGameAction::Quit);
+                            match ke.code {
+                                KeyCode::Enter => return Ok(PostGameAction::PlayAgain),
+                                KeyCode::Char('m') | KeyCode::Char('M') => {
+                                    return Ok(PostGameAction::Menu);
+                                }
+                                KeyCode::Char('q') | KeyCode::Char('Q') => {
+                                    return Ok(PostGameAction::Quit);
+                                }
+                                _ => {}
                             }
-                            _ => {}
                         }
+                        _ => {}
                     }
                 }
             }
         }
 
         if event::poll(Duration::from_millis(50))? {
-            if let Event::Key(ke) = event::read()? {
-                if ke.kind != KeyEventKind::Press {
-                    continue;
+            match event::read()? {
+                // INTERCETTIAMO IL RESIZE IN TEMPO REALE DURANTE IL GIOCO
+                Event::Resize(_, _) => {
+                    // È essenziale pulire completamente lo schermo (ClearType::All)
+                    // per evitare che i caratteri del vecchio bordo rimangano "appesi" nelle colonne esterne
+                    execute!(stdout, Clear(ClearType::All))?;
                 }
-                match ke.code {
-                    KeyCode::Up => {
-                        if game.cursor_y > 0 {
-                            game.cursor_y -= 1;
+                // Gestione dei tasti standard
+                Event::Key(ke) => {
+                    if ke.kind != KeyEventKind::Press {
+                        continue;
+                    }
+                    match ke.code {
+                        KeyCode::Up => {
+                            if game.cursor_y > 0 {
+                                game.cursor_y -= 1;
+                            }
                         }
-                    }
-                    KeyCode::Down => {
-                        if game.cursor_y < game.height - 1 {
-                            game.cursor_y += 1;
+                        KeyCode::Down => {
+                            if game.cursor_y < game.height - 1 {
+                                game.cursor_y += 1;
+                            }
                         }
-                    }
-                    KeyCode::Left => {
-                        if game.cursor_x > 0 {
-                            game.cursor_x -= 1;
+                        KeyCode::Left => {
+                            if game.cursor_x > 0 {
+                                game.cursor_x -= 1;
+                            }
                         }
-                    }
-                    KeyCode::Right => {
-                        if game.cursor_x < game.width - 1 {
-                            game.cursor_x += 1;
+                        KeyCode::Right => {
+                            if game.cursor_x < game.width - 1 {
+                                game.cursor_x += 1;
+                            }
                         }
+                        KeyCode::Enter => {
+                            game.reveal(game.cursor_x, game.cursor_y);
+                            game.check_victory();
+                        }
+                        KeyCode::Char(' ') => {
+                            game.toggle_flag();
+                        }
+                        KeyCode::Char('q') | KeyCode::Char('Q') => return Ok(PostGameAction::Quit),
+                        _ => {}
                     }
-                    KeyCode::Enter => {
-                        game.reveal(game.cursor_x, game.cursor_y);
-                        game.check_victory();
-                    }
-                    KeyCode::Char(' ') => {
-                        game.toggle_flag();
-                    }
-                    KeyCode::Char('q') | KeyCode::Char('Q') => return Ok(PostGameAction::Quit),
-                    _ => {}
                 }
-                game.update_camera();
-                game.draw()?;
+                _ => {}
             }
+            game.update_camera();
+            game.draw()?;
         }
     }
 }
