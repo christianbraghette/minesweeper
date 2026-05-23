@@ -5,3 +5,5 @@ edition = "2024"
 
 [dependencies]
 crossterm = "0.27"
+gilrs = "0.10"
+rodio = "0.17"

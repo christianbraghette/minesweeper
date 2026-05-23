@@ -1,14 +1,96 @@
 use crossterm::{
     cursor,
-    event::{self, Event, KeyCode, KeyEventKind},
+    event::{self, Event, KeyCode, KeyEventKind, MouseButton, MouseEventKind},
     execute,
     style::{Color, ResetColor, SetBackgroundColor, SetForegroundColor},
-    terminal::{self, Clear, ClearType},
+    terminal::{self, ClearType},
 };
-use std::io::{self, BufRead, Write, stdout};
-use std::time::Duration;
+use gilrs::{Button, Event as GEvent, Gilrs};
+use rodio::{OutputStream, Sink, Source, source::SineWave};
+use std::collections::HashMap;
+use std::io::{self, BufWriter, Write};
+use std::time::{Duration, Instant};
 
-// ─── Data types ──────────────────────────────────────────────────────────────
+// ─── Tipi di Azione Rimappabili ──────────────────────────────────────────────
+
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+enum Action {
+    MoveUp,
+    MoveDown,
+    MoveLeft,
+    MoveRight,
+    Reveal,
+    Flag,
+    Menu,
+    Quit,
+}
+
+impl Action {
+    fn name(&self) -> &'static str {
+        match self {
+            Action::MoveUp => "Muoviti Su",
+            Action::MoveDown => "Muoviti Giù",
+            Action::MoveLeft => "Muoviti Sinistra",
+            Action::MoveRight => "Muoviti Destra",
+            Action::Reveal => "Rivela Cella",
+            Action::Flag => "Piazza Bandiera",
+            Action::Menu => "Torna al Menu",
+            Action::Quit => "Esci",
+        }
+    }
+}
+
+// ─── Audio Engine Semplice (Senza file esterni) ───────────────────────────────
+
+struct AudioEngine {
+    _stream: Option<OutputStream>,
+    sink: Option<Sink>,
+}
+
+impl AudioEngine {
+    fn new() -> Self {
+        if let Ok((stream, stream_handle)) = OutputStream::try_default() {
+            if let Ok(sink) = Sink::try_new(&stream_handle) {
+                // Cediamo la proprietà dello stream per mantenerlo in vita nel thread
+                return AudioEngine {
+                    _stream: Some(stream),
+                    sink: Some(sink),
+                };
+            }
+        }
+        AudioEngine {
+            _stream: None,
+            sink: None,
+        }
+    }
+
+    fn play_reveal(&self) {
+        if let Some(ref sink) = self.sink {
+            sink.append(SineWave::new(440.0).take_duration(Duration::from_millis(50)));
+        }
+    }
+
+    fn play_flag(&self) {
+        if let Some(ref sink) = self.sink {
+            sink.append(SineWave::new(600.0).take_duration(Duration::from_millis(70)));
+        }
+    }
+
+    fn play_explosion(&self) {
+        if let Some(ref sink) = self.sink {
+            sink.append(SineWave::new(100.0).take_duration(Duration::from_millis(400)));
+        }
+    }
+
+    fn play_victory(&self) {
+        if let Some(ref sink) = self.sink {
+            sink.append(SineWave::new(587.33).take_duration(Duration::from_millis(150)));
+            sink.append(SineWave::new(880.0).take_duration(Duration::from_millis(300)));
+        }
+    }
+}
+
+// ─── Data types standard di gioco ─────────────────────────────────────────────
 
 #[derive(Clone, Copy, PartialEq)]
 enum CellState {
@@ -81,42 +163,249 @@ impl Config {
     }
 }
 
-// ─── Difficulty menu (runs before raw-mode) ───────────────────────────────────
+// ─── Struttura Globale Impostazioni ──────────────────────────────────────────
 
-/// Shows the menu in normal (cooked) terminal mode so `stdin` line-reading works
-/// cleanly. Arrow-key navigation is NOT available here since we avoid raw mode
-/// during input; we use plain numeric entry instead.
-fn show_menu() -> io::Result<Config> {
-    let stdin = io::stdin();
+struct Settings {
+    key_bindings: HashMap<KeyCode, Action>,
+}
 
-    loop {
-        println!();
-        println!("╔════════════════════════════════════════════╗");
-        println!("║                MINESWEEPER                 ║");
-        println!("╠════════════════════════════════════════════╣");
-        println!("║  Select difficulty:                        ║");
-        println!("║                                            ║");
-        println!("║     1. Beginner         ( 9× 9, 10)        ║");
-        println!("║     2. Intermediate     (16×16, 40)        ║");
-        println!("║     3. Expert           (30×16, 99)        ║");
-        println!("║     4. Tryhard          (30×20,140)        ║");
-        println!("║     5. Extreme          (30×24,200)        ║");
-        println!("╚════════════════════════════════════════════╝");
-        print!("Choice [1-5]: ");
-        io::stdout().flush()?;
-
-        let mut line = String::new();
-        stdin.lock().read_line(&mut line)?;
-
-        match line.trim() {
-            "1" => return Ok(Config::beginner()),
-            "2" => return Ok(Config::intermediate()),
-            "3" => return Ok(Config::expert()),
-            "4" => return Ok(Config::tryhard()),
-            "5" => return Ok(Config::extreme()),
-            _ => println!("Please enter a number between 1 and 5.\n"),
+impl Settings {
+    fn default() -> Self {
+        let mut bindings = HashMap::new();
+        bindings.insert(KeyCode::Up, Action::MoveUp);
+        bindings.insert(KeyCode::Char('w'), Action::MoveUp);
+        bindings.insert(KeyCode::Char('W'), Action::MoveUp);
+        bindings.insert(KeyCode::Down, Action::MoveDown);
+        bindings.insert(KeyCode::Char('s'), Action::MoveDown);
+        bindings.insert(KeyCode::Char('S'), Action::MoveDown);
+        bindings.insert(KeyCode::Left, Action::MoveLeft);
+        bindings.insert(KeyCode::Char('a'), Action::MoveLeft);
+        bindings.insert(KeyCode::Char('A'), Action::MoveLeft);
+        bindings.insert(KeyCode::Right, Action::MoveRight);
+        bindings.insert(KeyCode::Char('d'), Action::MoveRight);
+        bindings.insert(KeyCode::Char('D'), Action::MoveRight);
+        bindings.insert(KeyCode::Enter, Action::Reveal);
+        bindings.insert(KeyCode::Char(' '), Action::Flag);
+        bindings.insert(KeyCode::Char('m'), Action::Menu);
+        bindings.insert(KeyCode::Char('M'), Action::Menu);
+        bindings.insert(KeyCode::Char('q'), Action::Quit);
+        bindings.insert(KeyCode::Char('Q'), Action::Quit);
+        Settings {
+            key_bindings: bindings,
         }
     }
+}
+
+// ─── Stato Navigazione Menu Principale ────────────────────────────────────────
+
+enum MenuResult {
+    Play(Config),
+    Options,
+    Quit,
+}
+
+// ─── Logica dei Menu (Tastiera, Mouse e Gamepad abilitati) ─────────────────────
+
+fn run_main_menu(gilrs: &mut Gilrs) -> io::Result<MenuResult> {
+    let mut selected = 0;
+    let options = vec![
+        "Beginner         ( 9× 9, 10)",
+        "Intermediate     (16×16, 40)",
+        "Expert           (30×16, 99)",
+        "Tryhard          (30×20,140)",
+        "Extreme          (30×24,200)",
+        "Impostazioni Comandi",
+        "Esci dal Gioco",
+    ];
+
+    let mut stdout = io::stdout();
+    execute!(stdout, terminal::Clear(ClearType::All))?;
+
+    loop {
+        execute!(stdout, cursor::MoveTo(0, 0))?;
+        println!();
+        println!("  ╔════════════════════════════════════════════╗");
+        println!("  ║                MINESWEEPER                 ║");
+        println!("  ╠════════════════════════════════════════════╣");
+        println!("  ║  Select difficulty:                        ║");
+        println!("  ║                                            ║");
+
+        for (i, opt) in options.iter().enumerate() {
+            if i == selected {
+                execute!(stdout, SetForegroundColor(Color::Cyan))?;
+                println!("  ║  ► {:<40} ║", opt);
+                execute!(stdout, ResetColor)?;
+            } else {
+                println!("  ║    {:<40} ║", opt);
+            }
+        }
+        println!("  ╚════════════════════════════════════════════╝");
+        stdout.flush()?;
+
+        // Gestione Input Gamepad
+        while let Some(GEvent { event, .. }) = gilrs.next_event() {
+            match event {
+                gilrs::EventType::ButtonPressed(Button::DPadUp, _) => {
+                    if selected > 0 {
+                        selected -= 1;
+                    }
+                }
+                gilrs::EventType::ButtonPressed(Button::DPadDown, _) => {
+                    if selected < options.len() - 1 {
+                        selected += 1;
+                    }
+                }
+                gilrs::EventType::ButtonPressed(Button::South, _) => {
+                    // Tasto A (Xbox) / X (PlayStation)
+                    return Ok(match_menu_selection(selected));
+                }
+                _ => {}
+            }
+        }
+
+        // Gestione Input Tastiera / Mouse
+        if event::poll(Duration::from_millis(50))? {
+            match event::read()? {
+                Event::Key(ke) if ke.kind == KeyEventKind::Press => match ke.code {
+                    KeyCode::Up | KeyCode::Char('w') | KeyCode::Char('W') => {
+                        if selected > 0 {
+                            selected -= 1;
+                        }
+                    }
+                    KeyCode::Down | KeyCode::Char('s') | KeyCode::Char('S') => {
+                        if selected < options.len() - 1 {
+                            selected += 1;
+                        }
+                    }
+                    KeyCode::Enter => {
+                        return Ok(match_menu_selection(selected));
+                    }
+                    _ => {}
+                },
+                Event::Mouse(me) if me.kind == MouseEventKind::Down(MouseButton::Left) => {
+                    // Calcolo empirico della riga del terminale cliccata rispetto al menu grafico
+                    let row = me.row as isize;
+                    let start_row = 6;
+                    if row >= start_row && row < start_row + options.len() as isize {
+                        let clicked = (row - start_row) as usize;
+                        if clicked == selected {
+                            return Ok(match_menu_selection(selected));
+                        } else {
+                            selected = clicked;
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+}
+
+fn match_menu_selection(selected: usize) -> MenuResult {
+    match selected {
+        0 => MenuResult::Play(Config::beginner()),
+        1 => MenuResult::Play(Config::intermediate()),
+        2 => MenuResult::Play(Config::expert()),
+        3 => MenuResult::Play(Config::tryhard()),
+        4 => MenuResult::Play(Config::extreme()),
+        5 => MenuResult::Options,
+        _ => MenuResult::Quit,
+    }
+}
+
+// ─── Menu Opzioni per la Configurazione dei Tasti ───────────────────────────
+
+fn run_options_menu(settings: &mut Settings) -> io::Result<()> {
+    let mut stdout = io::stdout();
+    let actions = vec![
+        Action::MoveUp,
+        Action::MoveDown,
+        Action::MoveLeft,
+        Action::MoveRight,
+        Action::Reveal,
+        Action::Flag,
+        Action::Menu,
+        Action::Quit,
+    ];
+    let mut selected = 0;
+
+    execute!(stdout, terminal::Clear(ClearType::All))?;
+
+    loop {
+        execute!(stdout, cursor::MoveTo(0, 0))?;
+        println!();
+        println!("  ╔════════════════════════════════════════════╗");
+        println!("  ║             IMPOSTAZIONI TASTI             ║");
+        println!("  ╠════════════════════════════════════════════╣");
+        println!("  ║ Seleziona l'azione e premi INVIO per      ║");
+        println!("  ║ riassegnarla. Premi ESC per uscire.        ║");
+        println!("  ╠════════════════════════════════════════════╣");
+
+        for (i, action) in actions.iter().enumerate() {
+            let keys: Vec<String> = settings
+                .key_bindings
+                .iter()
+                .filter(|(_, a)| **a == *action)
+                .map(|(k, _)| format!("{:?}", k))
+                .collect();
+            let keys_str = keys.join(", ");
+
+            let line = format!("{}: {}", action.name(), keys_str);
+            if i == selected {
+                execute!(stdout, SetForegroundColor(Color::Cyan))?;
+                println!("  ║ ► {:<40} ║", line);
+                execute!(stdout, ResetColor)?;
+            } else {
+                println!("  ║   {:<40} ║", line);
+            }
+        }
+        println!("  ╚════════════════════════════════════════════╝");
+        stdout.flush()?;
+
+        if event::poll(Duration::from_millis(100))? {
+            match event::read()? {
+                Event::Key(ke) if ke.kind == KeyEventKind::Press => match ke.code {
+                    KeyCode::Up => {
+                        if selected > 0 {
+                            selected -= 1;
+                        }
+                    }
+                    KeyCode::Down => {
+                        if selected < actions.len() - 1 {
+                            selected += 1;
+                        }
+                    }
+                    KeyCode::Esc => break,
+                    KeyCode::Enter => {
+                        // Flusha lo schermo chiedendo il nuovo tasto
+                        execute!(stdout, terminal::Clear(ClearType::All))?;
+                        println!(
+                            "\n  Premi il nuovo tasto per l'azione: [{}]...",
+                            actions[selected].name()
+                        );
+                        stdout.flush()?;
+
+                        loop {
+                            if let Event::Key(new_ke) = event::read()? {
+                                if new_ke.kind == KeyEventKind::Press {
+                                    // Rimuove vecchie associazioni identiche per pulizia
+                                    settings
+                                        .key_bindings
+                                        .retain(|_, &mut a| a != actions[selected]);
+                                    settings.key_bindings.insert(new_ke.code, actions[selected]);
+                                    break;
+                                }
+                            }
+                        }
+                        execute!(stdout, terminal::Clear(ClearType::All))?;
+                    }
+                    _ => {}
+                },
+                _ => {}
+            }
+        }
+    }
+    Ok(())
 }
 
 // ─── Game ─────────────────────────────────────────────────────────────────────
@@ -128,11 +417,11 @@ struct Game {
     num_mines: usize,
     cursor_x: usize,
     cursor_y: usize,
-    // Aggiungiamo le coordinate della telecamera
     camera_x: usize,
     camera_y: usize,
     game_over: bool,
     victory: bool,
+    audio: AudioEngine,
 }
 
 impl Game {
@@ -150,10 +439,10 @@ impl Game {
             cursor_y: 0,
             game_over: false,
             victory: false,
+            audio: AudioEngine::new(),
         };
         game.generate_map();
         game.reveal_starting_zone();
-
         game
     }
 
@@ -208,16 +497,10 @@ impl Game {
     }
 
     fn reveal_starting_zone(&mut self) {
-        // --- 1. TENTATIVO GREEDY: Cerchiamo la prima cella completamente vuota (0 mine adiacenti)
         for y in 0..self.height {
             for x in 0..self.width {
-                let cell = &self.grid[y][x];
-                if !cell.has_mine && cell.adjacent_mines == 0 {
-                    // Trovata! La riveliamo e interrompiamo la funzione.
-                    // Questo avvierà l'effetto a catena che scopre l'intera area vuota.
+                if !self.grid[y][x].has_mine && self.grid[y][x].adjacent_mines == 0 {
                     self.reveal(x, y);
-
-                    // Spostiamo anche il cursore del giocatore qui, così l'azione parte da lì
                     self.cursor_x = x;
                     self.cursor_y = y;
                     return;
@@ -280,16 +563,12 @@ impl Game {
     // ── Reveal ────────────────────────────────────────────────────────────────
 
     fn reveal(&mut self, x: usize, y: usize) {
-        // ─── GESTIONE DEL CHORDING (Clic su cella già rivelata) ───────────────────
         if self.grid[y][x].state == CellState::Revealed {
             let mine_count = self.grid[y][x].adjacent_mines;
-
-            // Se la cella è vuota (0 mine intorno), non c'è nulla da fare/scoprire
             if mine_count == 0 {
                 return;
             }
 
-            // 1. Contiamo le bandierine piazzate attorno a questa cella
             let mut flag_count = 0;
             for dy in -1_isize..=1 {
                 for dx in -1_isize..=1 {
@@ -298,7 +577,6 @@ impl Game {
                     }
                     let ny = y as isize + dy;
                     let nx = x as isize + dx;
-
                     if nx >= 0 && nx < self.width as isize && ny >= 0 && ny < self.height as isize {
                         if self.grid[ny as usize][nx as usize].state == CellState::Flagged {
                             flag_count += 1;
@@ -307,7 +585,6 @@ impl Game {
                 }
             }
 
-            // 2. Se le bandierine sono sufficienti, riveliamo le caselle adiacenti rimaste
             if flag_count >= mine_count {
                 for dy in -1_isize..=1 {
                     for dx in -1_isize..=1 {
@@ -316,16 +593,12 @@ impl Game {
                         }
                         let ny = y as isize + dy;
                         let nx = x as isize + dx;
-
                         if nx >= 0
                             && nx < self.width as isize
                             && ny >= 0
                             && ny < self.height as isize
                         {
-                            let target_cell = &self.grid[ny as usize][nx as usize];
-                            // Riveliamo solo se la cella è effettivamente nascosta (evitiamo loop infiniti)
-                            // e NON è protetta da una bandierina.
-                            if target_cell.state == CellState::Hidden {
+                            if self.grid[ny as usize][nx as usize].state == CellState::Hidden {
                                 self.reveal(nx as usize, ny as usize);
                             }
                         }
@@ -335,14 +608,13 @@ impl Game {
             return;
         }
 
-        // Se la cella è flaggata, blocchiamo il reveal standard
         if self.grid[y][x].state == CellState::Flagged {
             return;
         }
 
         if self.grid[y][x].has_mine {
             self.game_over = true;
-            // Reveal all mines immediately
+            self.audio.play_explosion();
             for ry in 0..self.height {
                 for rx in 0..self.width {
                     if self.grid[ry][rx].has_mine {
@@ -352,7 +624,10 @@ impl Game {
             }
             return;
         }
+
         self.grid[y][x].state = CellState::Revealed;
+        self.audio.play_reveal();
+
         if self.grid[y][x].adjacent_mines == 0 {
             for dy in -1_isize..=1 {
                 for dx in -1_isize..=1 {
@@ -374,11 +649,13 @@ impl Game {
         match cell.state {
             CellState::Hidden => {
                 cell.state = CellState::Flagged;
-                self.num_mines -= 1;
+                self.num_mines = self.num_mines.saturating_sub(1);
+                self.audio.play_flag();
             }
             CellState::Flagged => {
                 cell.state = CellState::Hidden;
                 self.num_mines += 1;
+                self.audio.play_flag();
             }
             CellState::Revealed => {}
         }
@@ -394,6 +671,7 @@ impl Game {
             }
         }
         self.victory = true;
+        self.audio.play_victory();
     }
 
     // ── Render ────────────────────────────────────────────────────────────────
@@ -407,39 +685,27 @@ impl Game {
     // max_grid_width  = (term_cols - 4) / 3
     // max_grid_height = term_rows - 10   (clamped to ≥ 1)
     fn viewport_size(&self) -> (usize, usize) {
-        // terminal::size() returns (columns, rows)
         let (cols, rows) = terminal::size().unwrap_or((80, 24));
         let (cols, rows) = (cols as usize, rows as usize);
-
-        // UI overhead (see comment above)
         let col_overhead = 4_usize; // left pad + two border chars
         let row_overhead = 6_usize; // title + hint + counter + borders
-
         let max_grid_w = ((cols.saturating_sub(col_overhead)) / 3).max(1);
         let max_grid_h = rows.saturating_sub(row_overhead).max(1);
-        // Usiamo la logica esistente ma la applichiamo solo alla vista, non alla mappa reale
         (max_grid_w, max_grid_h)
     }
 
-    /// Centra o sposta la telecamera per assicurarsi che il cursore sia visibile
     fn update_camera(&mut self) {
         let (view_w, view_h) = self.viewport_size();
-
-        // Spostamento a destra/sinistra
         if self.cursor_x >= self.camera_x + view_w {
             self.camera_x = self.cursor_x - view_w + 1;
         } else if self.cursor_x < self.camera_x {
             self.camera_x = self.cursor_x;
         }
-
-        // Spostamento in basso/in alto
         if self.cursor_y >= self.camera_y + view_h {
             self.camera_y = self.cursor_y - view_h + 1;
         } else if self.cursor_y < self.camera_y {
             self.camera_y = self.cursor_y;
         }
-
-        // Vincola la telecamera ai confini della griglia
         if self.camera_x + view_w > self.width {
             self.camera_x = self.width.saturating_sub(view_w);
         }
@@ -449,42 +715,27 @@ impl Game {
     }
 
     fn draw(&self) -> io::Result<()> {
-        let mut out = stdout();
-        // Move to top-left and overwrite in place — no full clear avoids flicker.
-        // Each line is cleared before writing so stale chars are erased.
+        let stdout = io::stdout();
+        let mut out = BufWriter::new(stdout.lock());
         execute!(out, cursor::MoveTo(0, 0))?;
 
-        // Title bar
         execute!(out, SetForegroundColor(Color::Cyan))?;
-        execute!(out, terminal::Clear(ClearType::CurrentLine))?;
         println!("╔═════ MINESWEEPER ═════╗");
         execute!(out, ResetColor)?;
 
-        // Controls hint
         execute!(out, SetForegroundColor(Color::DarkGrey))?;
-        execute!(out, terminal::Clear(ClearType::CurrentLine))?;
         println!("  [↑↓←→] Move  [ENTER] Reveal  [SPACE] Flag  [M] Menu  [Q] Quit");
         execute!(out, ResetColor)?;
 
         execute!(out, SetForegroundColor(Color::Yellow))?;
-        execute!(out, terminal::Clear(ClearType::CurrentLine))?;
         println!("  Mines: {}", self.num_mines);
         execute!(out, ResetColor)?;
 
-        // Spazio vuoto o info di scorrimento
-        /*execute!(out, terminal::Clear(ClearType::CurrentLine))?;
-        println!("  ({}, {})", self.cursor_x, self.cursor_y);
-        execute!(out, ResetColor)?;*/
-
-        // ─── Calcolo dimensioni Finestra Visibile ─────────────────────────────────
         let (max_w, max_h) = self.viewport_size();
         let view_w = max_w.min(self.width);
         let view_h = max_h.min(self.height);
+        let border_color = Color::Cyan;
 
-        let border_color = Color::DarkGrey;
-
-        // ─── BORDO SUPERIORE DINAMICO ─────────────────────────────────────────────
-        // Compare SOLO se la telecamera include la prima riga della mappa (y = 0)
         if self.camera_y == 0 {
             execute!(
                 out,
@@ -505,23 +756,18 @@ impl Game {
             }
         }
 
-        // ─── RENDERING DELLE RIGHE ────────────────────────────────────────────────
         for y_offset in 0..view_h {
             let y = self.camera_y + y_offset;
-            execute!(out, terminal::Clear(ClearType::CurrentLine))?;
 
-            // Spaziatura iniziale per allineamento grafico
             print!("  ");
 
-            // BORDO SINISTRO DINAMICO: compare solo se siamo alla colonna reale 0
             if self.camera_x == 0 {
                 execute!(out, SetForegroundColor(border_color))?;
                 print!("║");
             } else {
-                print!(" "); // Spazio vuoto se il bordo è fuori schermo
+                print!(" ");
             }
 
-            // Disegno delle celle visibili in questa riga
             for x_offset in 0..view_w {
                 let x = self.camera_x + x_offset;
                 let cell = &self.grid[y][x];
@@ -535,7 +781,6 @@ impl Game {
                     )?;
                 }
 
-                // Logica di rendering della cella (Invariata)
                 match cell.state {
                     CellState::Hidden => {
                         if !is_cursor {
@@ -574,23 +819,19 @@ impl Game {
                         }
                     }
                 }
-
                 if is_cursor {
                     execute!(out, ResetColor)?;
                 }
             }
 
-            // BORDO DESTRO DINAMICO: compare solo se siamo arrivati all'ultima colonna reale della mappa
             if self.camera_x + view_w >= self.width {
                 execute!(out, SetForegroundColor(border_color))?;
                 println!("║");
             } else {
-                println!(); // Lascia scorrere senza visualizzare il muro destro
+                println!();
             }
         }
 
-        // ─── BORDO INFERIORE DINAMICO ─────────────────────────────────────────────
-        // Compare SOLO se la telecamera include l'ultima riga della mappa
         if self.camera_y + view_h >= self.height {
             execute!(
                 out,
@@ -612,10 +853,7 @@ impl Game {
         }
 
         execute!(out, ResetColor)?;
-        // Clear any leftover lines below the grid (e.g. old banners after resize)
-        execute!(out, terminal::Clear(ClearType::CurrentLine))?;
 
-        // Status message
         if self.game_over {
             println!();
             execute!(out, SetForegroundColor(Color::Red))?;
@@ -651,21 +889,19 @@ impl Game {
     }
 }
 
-// ─── Post-game action ────────────────────────────────────────────────────────
+// ─── Post Game Action ────────────────────────────────────────────────────────
 
 enum PostGameAction {
-    PlayAgain, // same config, new board
-    Menu,      // go back to difficulty menu
-    Quit,      // exit the program
+    PlayAgain,
+    Menu,
+    Quit,
 }
 
 // ─── Session ─────────────────────────────────────────────────────────────────
 
-/// Runs one full game session (raw mode already active).
-/// Returns what the player wants to do next.
-fn play(cfg: &Config) -> io::Result<PostGameAction> {
-    let mut stdout = stdout();
-    execute!(stdout, Clear(ClearType::All))?;
+fn play(cfg: &Config, settings: &Settings, gilrs: &mut Gilrs) -> io::Result<PostGameAction> {
+    let mut stdout = io::stdout();
+    execute!(stdout, terminal::Clear(ClearType::All))?;
 
     let mut game = Game::new(cfg);
 
@@ -676,83 +912,137 @@ fn play(cfg: &Config) -> io::Result<PostGameAction> {
 
     game.update_camera();
     game.draw()?;
+
+    let mut last_gamepad_move = Instant::now();
+
     loop {
         if game.game_over || game.victory {
-            // Board frozen — wait for a decisive keypress.
             loop {
-                if event::poll(Duration::from_millis(200))? {
-                    match event::read()? {
-                        // Se l'utente ridimensiona la finestra a partita finita
-                        Event::Resize(_, _) => {
-                            execute!(stdout, Clear(ClearType::All))?; // Pulisce i vecchi artefatti grafici
-                            game.update_camera();
-                            game.draw()?;
-                        }
-                        Event::Key(ke) => {
-                            if ke.kind != KeyEventKind::Press {
-                                continue;
-                            }
-                            match ke.code {
-                                KeyCode::Enter => return Ok(PostGameAction::PlayAgain),
-                                KeyCode::Char('m') | KeyCode::Char('M') => {
-                                    return Ok(PostGameAction::Menu);
+                if event::poll(Duration::from_millis(100))? {
+                    if let Event::Key(ke) = event::read()? {
+                        if ke.kind == KeyEventKind::Press {
+                            if let Some(action) = settings.key_bindings.get(&ke.code) {
+                                match action {
+                                    Action::Reveal => return Ok(PostGameAction::PlayAgain),
+                                    Action::Menu => return Ok(PostGameAction::Menu),
+                                    Action::Quit => return Ok(PostGameAction::Quit),
+                                    _ => {}
                                 }
-                                KeyCode::Char('q') | KeyCode::Char('Q') => {
-                                    return Ok(PostGameAction::Quit);
-                                }
-                                _ => {}
                             }
                         }
-                        _ => {}
                     }
                 }
             }
         }
 
+        // ── Input Gamepad ────────────────────────────────────────────────────
+        while let Some(GEvent { event, .. }) = gilrs.next_event() {
+            if last_gamepad_move.elapsed() > Duration::from_millis(150) {
+                match event {
+                    gilrs::EventType::ButtonPressed(Button::DPadUp, _) => {
+                        if game.cursor_y > 0 {
+                            game.cursor_y -= 1;
+                        }
+                        last_gamepad_move = Instant::now();
+                    }
+                    gilrs::EventType::ButtonPressed(Button::DPadDown, _) => {
+                        if game.cursor_y < game.height - 1 {
+                            game.cursor_y += 1;
+                        }
+                        last_gamepad_move = Instant::now();
+                    }
+                    gilrs::EventType::ButtonPressed(Button::DPadLeft, _) => {
+                        if game.cursor_x > 0 {
+                            game.cursor_x -= 1;
+                        }
+                        last_gamepad_move = Instant::now();
+                    }
+                    gilrs::EventType::ButtonPressed(Button::DPadRight, _) => {
+                        if game.cursor_x < game.width - 1 {
+                            game.cursor_x += 1;
+                        }
+                        last_gamepad_move = Instant::now();
+                    }
+                    gilrs::EventType::ButtonPressed(Button::South, _) => {
+                        game.reveal(game.cursor_x, game.cursor_y);
+                        game.check_victory();
+                    }
+                    gilrs::EventType::ButtonPressed(Button::East, _) => {
+                        game.toggle_flag();
+                    }
+                    _ => {}
+                }
+            }
+        }
+
+        // ── Input Tastiera e Mouse ───────────────────────────────────────────
         if event::poll(Duration::from_millis(20))? {
             match event::read()? {
-                // INTERCETTIAMO IL RESIZE IN TEMPO REALE DURANTE IL GIOCO
                 Event::Resize(_, _) => {
-                    // È essenziale pulire completamente lo schermo (ClearType::All)
-                    // per evitare che i caratteri del vecchio bordo rimangano "appesi" nelle colonne esterne
-                    execute!(stdout, Clear(ClearType::All))?;
+                    execute!(stdout, terminal::Clear(ClearType::All))?;
                 }
-                // Gestione dei tasti standard
-                Event::Key(ke) => {
-                    if ke.kind != KeyEventKind::Press {
-                        continue;
+                Event::Key(ke) if ke.kind == KeyEventKind::Press => {
+                    if let Some(action) = settings.key_bindings.get(&ke.code) {
+                        match action {
+                            Action::MoveUp => {
+                                if game.cursor_y > 0 {
+                                    game.cursor_y -= 1;
+                                }
+                            }
+                            Action::MoveDown => {
+                                if game.cursor_y < game.height - 1 {
+                                    game.cursor_y += 1;
+                                }
+                            }
+                            Action::MoveLeft => {
+                                if game.cursor_x > 0 {
+                                    game.cursor_x -= 1;
+                                }
+                            }
+                            Action::MoveRight => {
+                                if game.cursor_x < game.width - 1 {
+                                    game.cursor_x += 1;
+                                }
+                            }
+                            Action::Reveal => {
+                                game.reveal(game.cursor_x, game.cursor_y);
+                                game.check_victory();
+                            }
+                            Action::Flag => game.toggle_flag(),
+                            Action::Menu => return Ok(PostGameAction::Menu),
+                            Action::Quit => return Ok(PostGameAction::Quit),
+                        }
                     }
-                    match ke.code {
-                        KeyCode::Up | KeyCode::Char('w') | KeyCode::Char('W') => {
-                            if game.cursor_y > 0 {
-                                game.cursor_y -= 1;
-                            }
-                        }
-                        KeyCode::Down | KeyCode::Char('s') | KeyCode::Char('S') => {
-                            if game.cursor_y < game.height - 1 {
-                                game.cursor_y += 1;
-                            }
-                        }
-                        KeyCode::Left | KeyCode::Char('a') | KeyCode::Char('A') => {
-                            if game.cursor_x > 0 {
-                                game.cursor_x -= 1;
-                            }
-                        }
-                        KeyCode::Right | KeyCode::Char('d') | KeyCode::Char('D') => {
-                            if game.cursor_x < game.width - 1 {
-                                game.cursor_x += 1;
-                            }
-                        }
-                        KeyCode::Enter => {
-                            game.reveal(game.cursor_x, game.cursor_y);
+                }
+                Event::Mouse(me) => {
+                    let (view_w, view_h) = game.viewport_size();
+                    let grid_start_col = 3; // Allineamento dato dai bordi ("  ║")
+                    let grid_start_row = 4; // Righe di overhead dell'interfaccia
+
+                    let mouse_col = me.column as isize;
+                    let mouse_row = me.row as isize;
+
+                    // Calcola su quale cella della griglia visibile si trova il mouse
+                    let cell_click_x = (mouse_col - grid_start_col) / 3;
+                    let cell_click_y = mouse_row - grid_start_row;
+
+                    if cell_click_x >= 0
+                        && cell_click_x < view_w as isize
+                        && cell_click_y >= 0
+                        && cell_click_y < view_h as isize
+                    {
+                        let map_x = game.camera_x + cell_click_x as usize;
+                        let map_y = game.camera_y + cell_click_y as usize;
+
+                        game.cursor_x = map_x;
+                        game.cursor_y = map_y;
+
+                        if me.kind == MouseEventKind::Down(MouseButton::Left) {
+                            game.reveal(map_x, map_y);
                             game.check_victory();
-                        }
-                        KeyCode::Char(' ') => {
+                        } else if me.kind == MouseEventKind::Down(MouseButton::Right) {
                             game.toggle_flag();
                         }
-                        KeyCode::Char('m') | KeyCode::Char('M') => return Ok(PostGameAction::Menu),
-                        KeyCode::Char('q') | KeyCode::Char('Q') => return Ok(PostGameAction::Quit),
-                        _ => {}
                     }
                 }
                 _ => {}
@@ -763,33 +1053,61 @@ fn play(cfg: &Config) -> io::Result<PostGameAction> {
     }
 }
 
-// ─── Main ─────────────────────────────────────────────────────────────────────
+// ─── Main Entry Point ────────────────────────────────────────────────────────
 
 fn main() -> io::Result<()> {
+    let mut settings = Settings::default();
+    let mut gilrs = Gilrs::new().unwrap();
+
     'app: loop {
-        // ── Menu (cooked mode) ────────────────────────────────────────────────
-        let cfg = show_menu()?;
-
-        // ── Enter raw / alternate-screen mode ─────────────────────────────────
+        // Abilitiamo la raw mode e il mouse anche per i menu in modo che la selezione tastiera/mouse sia fluida
         terminal::enable_raw_mode()?;
-        let mut stdout = stdout();
-        execute!(stdout, terminal::EnterAlternateScreen, cursor::Hide)?;
+        let mut stdout = io::stdout();
+        execute!(
+            stdout,
+            terminal::EnterAlternateScreen,
+            cursor::Hide,
+            event::EnableMouseCapture
+        )?;
 
-        // ── Session loop: replay without returning to menu ─────────────────────
-        let action = loop {
-            match play(&cfg)? {
-                PostGameAction::PlayAgain => continue, // same config, new board
-                other => break other,
+        let menu_res = run_main_menu(&mut gilrs)?;
+
+        match menu_res {
+            MenuResult::Options => {
+                run_options_menu(&mut settings)?;
+                continue 'app;
             }
-        };
+            MenuResult::Quit => {
+                execute!(
+                    stdout,
+                    event::DisableMouseCapture,
+                    cursor::Show,
+                    terminal::LeaveAlternateScreen
+                )?;
+                terminal::disable_raw_mode()?;
+                break 'app;
+            }
+            MenuResult::Play(cfg) => {
+                let action = loop {
+                    match play(&cfg, &settings, &mut gilrs)? {
+                        PostGameAction::PlayAgain => continue,
+                        other => break other,
+                    }
+                };
 
-        // ── Restore terminal ──────────────────────────────────────────────────
-        execute!(stdout, cursor::Show, terminal::LeaveAlternateScreen)?;
-        terminal::disable_raw_mode()?;
+                execute!(
+                    stdout,
+                    event::DisableMouseCapture,
+                    cursor::Show,
+                    terminal::LeaveAlternateScreen
+                )?;
+                terminal::disable_raw_mode()?;
 
-        match action {
-            PostGameAction::Menu => continue 'app,
-            _ => break 'app, // Quit
+                match action {
+                    PostGameAction::Menu => continue 'app,
+                    _ => break 'app,
+                }
+            }
         }
     }
     Ok(())

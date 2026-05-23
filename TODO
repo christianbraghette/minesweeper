@@ -1,9 +1,0 @@
-Features:
- - Rewrite main menu for keyboard control;
- - Adds gamepad controls;
- - Add option menu with customized controls;
- - Add sounds;
- - Add mouse controls for graphical environements;
-
-Bugs:
- - Resolve (0,0) starting position for initial reveal;
