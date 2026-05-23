@@ -92,7 +92,7 @@ fn show_menu() -> io::Result<Config> {
     loop {
         println!();
         println!("╔════════════════════════════════════════════╗");
-        println!("║           MINESWEEPER – RUST               ║");
+        println!("║                MINESWEEPER                 ║");
         println!("╠════════════════════════════════════════════╣");
         println!("║  Select difficulty:                        ║");
         println!("║                                            ║");
@@ -457,7 +457,7 @@ impl Game {
         // Title bar
         execute!(out, SetForegroundColor(Color::Cyan))?;
         execute!(out, terminal::Clear(ClearType::CurrentLine))?;
-        println!("╔══ MINESWEEPER – RUST ══╗");
+        println!("╔═════ MINESWEEPER ═════╗");
         execute!(out, ResetColor)?;
 
         // Controls hint
