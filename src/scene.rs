@@ -27,8 +27,8 @@ pub fn main_menu_scene(gilrs: &mut Gilrs) -> io::Result<MenuResult> {
         "Expert           (30×16, 99)",
         "Tryhard          (30×20,140)",
         "Extreme          (30×24,200)",
-        "Impostazioni Comandi",
-        "Esci dal Gioco",
+        "Options",
+        "Quit",
     ];
 
     let mut stdout = io::stdout();
@@ -46,16 +46,16 @@ pub fn main_menu_scene(gilrs: &mut Gilrs) -> io::Result<MenuResult> {
         for (i, opt) in options.iter().enumerate() {
             if i == selected {
                 execute!(stdout, SetForegroundColor(Color::Cyan))?;
-                println!("  ║  ► {:<40} ║", opt);
+                println!("  ║  ► {:<40}║", opt);
                 execute!(stdout, ResetColor)?;
             } else {
-                println!("  ║    {:<40} ║", opt);
+                println!("  ║    {:<40}║", opt);
             }
         }
         println!("  ╚════════════════════════════════════════════╝");
         stdout.flush()?;
 
-        // Gestione Input Gamepad
+        // Gamepad input
         while let Some(GEvent { event, .. }) = gilrs.next_event() {
             match event {
                 gilrs::EventType::ButtonPressed(Button::DPadUp, _) => {
@@ -69,14 +69,14 @@ pub fn main_menu_scene(gilrs: &mut Gilrs) -> io::Result<MenuResult> {
                     }
                 }
                 gilrs::EventType::ButtonPressed(Button::South, _) => {
-                    // Tasto A (Xbox) / X (PlayStation)
+                    // A (Xbox) / X (PlayStation)
                     return Ok(match_menu_selection(selected));
                 }
                 _ => {}
             }
         }
 
-        // Gestione Input Tastiera / Mouse
+        // Keyboard / Mouse input
         if event::poll(Duration::from_millis(50))? {
             match event::read()? {
                 Event::Key(ke) if ke.kind == KeyEventKind::Press => match ke.code {
@@ -96,7 +96,7 @@ pub fn main_menu_scene(gilrs: &mut Gilrs) -> io::Result<MenuResult> {
                     _ => {}
                 },
                 Event::Mouse(me) if me.kind == MouseEventKind::Down(MouseButton::Left) => {
-                    // Calcolo empirico della riga del terminale cliccata rispetto al menu grafico
+                    // Empirical row calculation relative to the menu layout
                     let row = me.row as isize;
                     let start_row = 6;
                     if row >= start_row && row < start_row + options.len() as isize {
@@ -126,7 +126,7 @@ fn match_menu_selection(selected: usize) -> MenuResult {
     }
 }
 
-pub fn controls_menu_scene(settings: &mut Settings) -> io::Result<()> {
+pub fn controls_menu_scene(settings: &mut Settings, gilrs: &mut Gilrs) -> io::Result<()> {
     let mut stdout = io::stdout();
     let actions = vec![
         Action::MoveUp,
@@ -146,10 +146,10 @@ pub fn controls_menu_scene(settings: &mut Settings) -> io::Result<()> {
         execute!(stdout, cursor::MoveTo(0, 0))?;
         println!();
         println!("  ╔════════════════════════════════════════════╗");
-        println!("  ║             IMPOSTAZIONI TASTI             ║");
+        println!("  ║              KEY BINDINGS                  ║");
         println!("  ╠════════════════════════════════════════════╣");
-        println!("  ║ Seleziona l'azione e premi INVIO per      ║");
-        println!("  ║ riassegnarla. Premi ESC per uscire.        ║");
+        println!("  ║  Select an action and press ENTER to       ║");
+        println!("  ║  rebind it. Press ESC to go back.          ║");
         println!("  ╠════════════════════════════════════════════╣");
 
         for (i, action) in actions.iter().enumerate() {
@@ -164,15 +164,62 @@ pub fn controls_menu_scene(settings: &mut Settings) -> io::Result<()> {
             let line = format!("{}: {}", action.name(), keys_str);
             if i == selected {
                 execute!(stdout, SetForegroundColor(Color::Cyan))?;
-                println!("  ║ ► {:<40} ║", line);
+                println!("  ║  ► {:<40}║", line);
                 execute!(stdout, ResetColor)?;
             } else {
-                println!("  ║   {:<40} ║", line);
+                println!("  ║    {:<40}║", line);
             }
         }
         println!("  ╚════════════════════════════════════════════╝");
         stdout.flush()?;
 
+        // Gamepad input
+        while let Some(GEvent { event, .. }) = gilrs.next_event() {
+            match event {
+                gilrs::EventType::ButtonPressed(Button::DPadUp, _) => {
+                    if selected > 0 {
+                        selected -= 1;
+                    }
+                }
+                gilrs::EventType::ButtonPressed(Button::DPadDown, _) => {
+                    if selected < actions.len() - 1 {
+                        selected += 1;
+                    }
+                }
+                // B (Xbox) / Circle (PS) or Start — go back
+                gilrs::EventType::ButtonPressed(Button::East, _)
+                | gilrs::EventType::ButtonPressed(Button::Start, _) => {
+                    return Ok(());
+                }
+                gilrs::EventType::ButtonPressed(Button::South, _) => {
+                    // A (Xbox) / X (PlayStation) — rebind selected action
+                    execute!(stdout, terminal::Clear(ClearType::All))?;
+                    println!(
+                        "\n  Press a new key for action: [{}]...",
+                        actions[selected].name()
+                    );
+                    stdout.flush()?;
+                    loop {
+                        if event::poll(Duration::from_millis(100))? {
+                            if let Event::Key(new_ke) = event::read()? {
+                                if new_ke.kind == KeyEventKind::Press {
+                                    // Remove existing bindings for this action
+                                    settings
+                                        .key_bindings
+                                        .retain(|_, &mut a| a != actions[selected]);
+                                    settings.key_bindings.insert(new_ke.code, actions[selected]);
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                    execute!(stdout, terminal::Clear(ClearType::All))?;
+                }
+                _ => {}
+            }
+        }
+
+        // Keyboard / Mouse input
         if event::poll(Duration::from_millis(100))? {
             match event::read()? {
                 Event::Key(ke) if ke.kind == KeyEventKind::Press => match ke.code {
@@ -188,18 +235,17 @@ pub fn controls_menu_scene(settings: &mut Settings) -> io::Result<()> {
                     }
                     KeyCode::Esc => break,
                     KeyCode::Enter => {
-                        // Flusha lo schermo chiedendo il nuovo tasto
+                        // Flush screen and prompt for new key
                         execute!(stdout, terminal::Clear(ClearType::All))?;
                         println!(
-                            "\n  Premi il nuovo tasto per l'azione: [{}]...",
+                            "\n  Press a new key for action: [{}]...",
                             actions[selected].name()
                         );
                         stdout.flush()?;
-
                         loop {
                             if let Event::Key(new_ke) = event::read()? {
                                 if new_ke.kind == KeyEventKind::Press {
-                                    // Rimuove vecchie associazioni identiche per pulizia
+                                    // Remove existing bindings for this action
                                     settings
                                         .key_bindings
                                         .retain(|_, &mut a| a != actions[selected]);
@@ -212,6 +258,39 @@ pub fn controls_menu_scene(settings: &mut Settings) -> io::Result<()> {
                     }
                     _ => {}
                 },
+                Event::Mouse(me) if me.kind == MouseEventKind::Down(MouseButton::Left) => {
+                    // Action rows start at row 7 (1 blank + 5 header rows + 1 separator)
+                    let row = me.row as isize;
+                    let start_row = 7;
+                    if row >= start_row && row < start_row + actions.len() as isize {
+                        let clicked = (row - start_row) as usize;
+                        if clicked == selected {
+                            // Second click on already-selected item: trigger rebind
+                            execute!(stdout, terminal::Clear(ClearType::All))?;
+                            println!(
+                                "\n  Press a new key for action: [{}]...",
+                                actions[selected].name()
+                            );
+                            stdout.flush()?;
+                            loop {
+                                if let Event::Key(new_ke) = event::read()? {
+                                    if new_ke.kind == KeyEventKind::Press {
+                                        settings
+                                            .key_bindings
+                                            .retain(|_, &mut a| a != actions[selected]);
+                                        settings
+                                            .key_bindings
+                                            .insert(new_ke.code, actions[selected]);
+                                        break;
+                                    }
+                                }
+                            }
+                            execute!(stdout, terminal::Clear(ClearType::All))?;
+                        } else {
+                            selected = clicked;
+                        }
+                    }
+                }
                 _ => {}
             }
         }
@@ -219,10 +298,10 @@ pub fn controls_menu_scene(settings: &mut Settings) -> io::Result<()> {
     Ok(())
 }
 
-pub fn options_menu_scene(settings: &mut Settings) -> io::Result<()> {
+pub fn options_menu_scene(settings: &mut Settings, gilrs: &mut Gilrs) -> io::Result<()> {
     let mut stdout = io::stdout();
     let mut selected = 0_u8;
-    const TOTAL_OPTIONS: u8 = 3; // 0: Volume, 1: Input, 2: Link ai Tasti
+    const TOTAL_OPTIONS: u8 = 3; // 0: Volume, 1: Input Device, 2: Key Bindings
 
     execute!(stdout, terminal::Clear(ClearType::All))?;
 
@@ -230,13 +309,13 @@ pub fn options_menu_scene(settings: &mut Settings) -> io::Result<()> {
         execute!(stdout, cursor::MoveTo(0, 0))?;
         println!();
         println!("  ╔════════════════════════════════════════════╗");
-        println!("  ║                 IMPOSTAZIONI               ║");
+        println!("  ║                  SETTINGS                  ║");
         println!("  ╠════════════════════════════════════════════╣");
-        println!("  ║ ▲/▼: Naviga | ◄/►: Modifica Valori         ║");
-        println!("  ║ INVIO: Conferma/Apri  | ESC: Torna Indietro║");
+        println!("  ║  ▲/▼: Navigate  |  ◄/►: Change Value       ║");
+        println!("  ║  ENTER: Confirm/Open  |  ESC: Go Back      ║");
         println!("  ╠════════════════════════════════════════════╣");
 
-        // --- 1. OPZIONE: VOLUME ---
+        // --- Option 1: VOLUME ---
         let volume = (settings.volume as usize + 1) / 32;
         let filled = "█".repeat(volume);
         let empty = "░".repeat(8 - volume);
@@ -244,85 +323,137 @@ pub fn options_menu_scene(settings: &mut Settings) -> io::Result<()> {
 
         if selected == 0 {
             execute!(stdout, SetForegroundColor(Color::Cyan))?;
-            println!("  ║ ► {:<40} ║", volume_line);
+            println!("  ║  ► {:<40}║", volume_line);
             execute!(stdout, ResetColor)?;
         } else {
-            println!("  ║   {:<40} ║", volume_line);
+            println!("  ║    {:<40}║", volume_line);
         }
 
-        // --- 2. OPZIONE: INPUT TYPE ---
+        // --- Option 2: INPUT DEVICE ---
         let input_mode = if settings.gamepad {
             "Gamepad"
         } else {
-            "Tastiera"
+            "Keyboard"
         };
-        let input_line = format!("Dispositivo: < {} >", input_mode);
+        let input_line = format!("Input Device: < {} >", input_mode);
 
         if selected == 1 {
             execute!(stdout, SetForegroundColor(Color::Cyan))?;
-            println!("  ║ ► {:<40} ║", input_line);
+            println!("  ║  ► {:<40}║", input_line);
             execute!(stdout, ResetColor)?;
         } else {
-            println!("  ║   {:<40} ║", input_line);
+            println!("  ║    {:<40}║", input_line);
         }
 
-        println!("  ╠════════════════════════════════════════════╣");
-
-        // --- 3. OPZIONE: LINK AL SOTTO-MENU ---
-        let link_line = "Configurazione Tasti Tastiera...".to_string();
+        let link_line = "Keyboard Key Bindings...";
 
         if selected == 2 {
             execute!(stdout, SetForegroundColor(Color::Cyan))?;
-            println!("  ║ ► {:<40} ║", link_line);
+            println!("  ║  ► {:<40}║", link_line);
             execute!(stdout, ResetColor)?;
         } else {
-            println!("  ║   {:<40} ║", link_line);
+            println!("  ║    {:<40}║", link_line);
         }
 
         println!("  ╚════════════════════════════════════════════╝");
         stdout.flush()?;
 
+        while let Some(GEvent { event, .. }) = gilrs.next_event() {
+            match event {
+                gilrs::EventType::ButtonPressed(Button::DPadUp, _) => {
+                    selected = selected.saturating_sub(1);
+                }
+                gilrs::EventType::ButtonPressed(Button::DPadDown, _) => {
+                    if selected < TOTAL_OPTIONS - 1 {
+                        selected = selected.saturating_add(1);
+                    }
+                }
+                gilrs::EventType::ButtonPressed(Button::DPadLeft, _) => {
+                    if selected == 0 {
+                        settings.volume = settings.volume.saturating_sub(32);
+                    } else if selected == 1 {
+                        settings.gamepad = !settings.gamepad;
+                    }
+                }
+                gilrs::EventType::ButtonPressed(Button::DPadRight, _) => {
+                    if selected == 0 {
+                        settings.volume = settings.volume.saturating_add(32); //.min(224);
+                    } else if selected == 1 {
+                        settings.gamepad = !settings.gamepad;
+                    }
+                }
+                // B (Xbox) / Circle (PS) or Start — go back
+                gilrs::EventType::ButtonPressed(Button::East, _)
+                | gilrs::EventType::ButtonPressed(Button::Start, _) => {
+                    return Ok(());
+                }
+                gilrs::EventType::ButtonPressed(Button::South, _) => {
+                    // A (Xbox) / X (PlayStation) — confirm / open sub-menu
+                    if selected == 2 {
+                        execute!(stdout, terminal::Clear(ClearType::All))?;
+                        controls_menu_scene(settings, gilrs)?;
+                        execute!(stdout, terminal::Clear(ClearType::All))?;
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        // Keyboard / Mouse input
         if event::poll(Duration::from_millis(100))? {
-            if let Event::Key(ke) = event::read()? {
-                if ke.kind == KeyEventKind::Press {
-                    match ke.code {
-                        KeyCode::Up => {
-                            if selected > 0 {
-                                selected = selected.saturating_sub(1);
-                            }
+            match event::read()? {
+                Event::Key(ke) if ke.kind == KeyEventKind::Press => match ke.code {
+                    KeyCode::Up => {
+                        selected = selected.saturating_sub(1);
+                    }
+                    KeyCode::Down => {
+                        if selected < TOTAL_OPTIONS - 1 {
+                            selected = selected.saturating_add(1);
                         }
-                        KeyCode::Down => {
-                            if selected < TOTAL_OPTIONS - 1 {
-                                selected = selected.saturating_add(1);
-                            }
+                    }
+                    KeyCode::Left => {
+                        if selected == 0 {
+                            settings.volume = settings.volume.saturating_sub(32);
+                        } else if selected == 1 {
+                            settings.gamepad = !settings.gamepad;
                         }
-                        KeyCode::Left => {
-                            if selected == 0 && settings.volume > 0 {
-                                settings.volume -= 1;
-                            }
-                            if selected == 1 {
-                                settings.gamepad = !settings.gamepad;
-                            }
+                    }
+                    KeyCode::Right => {
+                        if selected == 0 {
+                            settings.volume = settings.volume.saturating_add(32); //.min(224);
+                        } else if selected == 1 {
+                            settings.gamepad = !settings.gamepad;
                         }
-                        KeyCode::Right => {
-                            if selected == 0 && settings.volume < 8 {
-                                settings.volume += 1;
-                            }
-                            if selected == 1 {
-                                settings.gamepad = !settings.gamepad;
-                            }
+                    }
+                    KeyCode::Esc => break,
+                    KeyCode::Enter => {
+                        if selected == 2 {
+                            execute!(stdout, terminal::Clear(ClearType::All))?;
+                            controls_menu_scene(settings, gilrs)?;
+                            execute!(stdout, terminal::Clear(ClearType::All))?;
                         }
-                        KeyCode::Esc => break, // Esce dalle impostazioni globali
-                        KeyCode::Enter => {
-                            if selected == 2 {
-                                execute!(stdout, terminal::Clear(ClearType::All))?;
-                                controls_menu_scene(settings)?;
-                                execute!(stdout, terminal::Clear(ClearType::All))?;
-                            }
-                        }
+                    }
+                    _ => {}
+                },
+                Event::Mouse(me) if me.kind == MouseEventKind::Down(MouseButton::Left) => {
+                    // Options start at row 7; separator at row 9 splits Volume/Input from Key Bindings
+                    let row = me.row as isize;
+                    match row {
+                        7 => selected = 0,
+                        8 => selected = 1,
+                        10 => selected = 2,
                         _ => {}
                     }
                 }
+                Event::Mouse(me) if me.kind == MouseEventKind::ScrollUp => {
+                    selected = selected.saturating_sub(1);
+                }
+                Event::Mouse(me) if me.kind == MouseEventKind::ScrollDown => {
+                    if selected < TOTAL_OPTIONS - 1 {
+                        selected = selected.saturating_add(1);
+                    }
+                }
+                _ => {}
             }
         }
     }
@@ -335,11 +466,29 @@ pub enum PostGameAction {
     Quit,
 }
 
-fn end_scene(settings: &Settings) -> io::Result<PostGameAction> {
+fn end_scene(settings: &Settings, gilrs: &mut Gilrs) -> io::Result<PostGameAction> {
     loop {
+        // Gamepad input
+        while let Some(GEvent { event, .. }) = gilrs.next_event() {
+            match event {
+                gilrs::EventType::ButtonPressed(Button::South, _) => {
+                    // A (Xbox) / X (PlayStation) — play again
+                    return Ok(PostGameAction::PlayAgain);
+                }
+                gilrs::EventType::ButtonPressed(Button::Start, _) => {
+                    return Ok(PostGameAction::Menu);
+                }
+                gilrs::EventType::ButtonPressed(Button::Select, _) => {
+                    return Ok(PostGameAction::Quit);
+                }
+                _ => {}
+            }
+        }
+
+        // Keyboard / Mouse input
         if event::poll(Duration::from_millis(100))? {
-            if let Event::Key(ke) = event::read()? {
-                if ke.kind == KeyEventKind::Press {
+            match event::read()? {
+                Event::Key(ke) if ke.kind == KeyEventKind::Press => {
                     if let Some(action) = settings.key_bindings.get(&ke.code) {
                         match action {
                             Action::Reveal => return Ok(PostGameAction::PlayAgain),
@@ -349,6 +498,13 @@ fn end_scene(settings: &Settings) -> io::Result<PostGameAction> {
                         }
                     }
                 }
+                Event::Mouse(me) if me.kind == MouseEventKind::Down(MouseButton::Left) => {
+                    return Ok(PostGameAction::PlayAgain);
+                }
+                Event::Mouse(me) if me.kind == MouseEventKind::Down(MouseButton::Right) => {
+                    return Ok(PostGameAction::Menu);
+                }
+                _ => {}
             }
         }
     }
@@ -376,12 +532,12 @@ pub fn game_scene(
     if settings.gamepad {
         loop {
             if game.game_over || game.victory {
-                return end_scene(settings);
+                return end_scene(settings, gilrs);
             }
 
             let mut changed = false;
 
-            // ── Input Gamepad ────────────────────────────────────────────────────
+            // ── Gamepad input ────────────────────────────────────────────────────
             while let Some(GEvent { event, .. }) = gilrs.next_event() {
                 if last_gamepad_move.elapsed() > Duration::from_millis(100) {
                     match event {
@@ -434,11 +590,11 @@ pub fn game_scene(
     } else {
         loop {
             if game.game_over || game.victory {
-                return end_scene(settings);
+                return end_scene(settings, gilrs);
             }
 
             let mut changed = false;
-            // ── Input Tastiera e Mouse ───────────────────────────────────────────
+            // ── Keyboard and Mouse input ─────────────────────────────────────────
             while event::poll(Duration::from_millis(16))? {
                 match event::read()? {
                     Event::Resize(_, _) => {
@@ -488,13 +644,13 @@ pub fn game_scene(
                     }
                     Event::Mouse(me) => {
                         let (view_w, view_h) = game.viewport_size();
-                        let grid_start_col = 3; // Allineamento dato dai bordi ("  ║")
-                        let grid_start_row = 4; // Righe di overhead dell'interfaccia
+                        let grid_start_col = 3; // Offset from border ("  ║")
+                        let grid_start_row = 4; // Interface overhead rows
 
                         let mouse_col = me.column as isize;
                         let mouse_row = me.row as isize;
 
-                        // Calcola su quale cella della griglia visibile si trova il mouse
+                        // Calculate which visible grid cell the mouse is over
                         let cell_click_x = (mouse_col - grid_start_col) / 3;
                         let cell_click_y = mouse_row - grid_start_row;
 

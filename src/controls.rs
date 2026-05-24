@@ -13,14 +13,14 @@ pub enum Action {
 impl Action {
     pub fn name(&self) -> &'static str {
         match self {
-            Action::MoveUp => "Muoviti Su",
-            Action::MoveDown => "Muoviti Giù",
-            Action::MoveLeft => "Muoviti Sinistra",
-            Action::MoveRight => "Muoviti Destra",
-            Action::Reveal => "Rivela Cella",
-            Action::Flag => "Piazza Bandiera",
-            Action::Menu => "Torna al Menu",
-            Action::Quit => "Esci",
+            Action::MoveUp => "Move Up",
+            Action::MoveDown => "Move Down",
+            Action::MoveLeft => "Move Left",
+            Action::MoveRight => "Move Right",
+            Action::Reveal => "Reveal Cell",
+            Action::Flag => "Flag Cell",
+            Action::Menu => "Back to Menu",
+            Action::Quit => "Quit",
         }
     }
 }

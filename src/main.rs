@@ -36,7 +36,7 @@ fn main() -> io::Result<()> {
 
         match menu_res {
             MenuResult::Options => {
-                options_menu_scene(&mut settings)?;
+                options_menu_scene(&mut settings, &mut gilrs)?;
                 continue 'app;
             }
             MenuResult::Quit => {
