@@ -142,7 +142,6 @@ impl Game {
     }
 
     fn set_starting_zone(&mut self) {
-        // Trova la prima cella sicura con adjacent_mines == 0
         let safe = 'search: {
             for y in 0..self.height {
                 for x in 0..self.width {
@@ -151,7 +150,6 @@ impl Game {
                     }
                 }
             }
-            // Fallback: prima cella non-mina qualsiasi
             'fallback: {
                 for y in 0..self.height {
                     for x in 0..self.width {
@@ -166,16 +164,18 @@ impl Game {
 
         let Some((safe_x, safe_y)) = safe else { return };
 
-        // Shift ciclico delle righe (asse Y)
-        // Vogliamo che safe_y finisca su cursor_y
+        // Shift Y: quante righe devo ruotare per portare safe_y su cursor_y?
         let dy = (self.cursor_y + self.height - safe_y) % self.height;
-        self.grid.rotate_left(self.height - dy); // equivale a rotate_right(dy)
+        if dy != 0 {
+            self.grid.rotate_left(self.height - dy);
+        }
 
-        // Shift ciclico delle colonne (asse X)
-        // Vogliamo che safe_x finisca su cursor_x
+        // Shift X: quante colonne devo ruotare per portare safe_x su cursor_x?
         let dx = (self.cursor_x + self.width - safe_x) % self.width;
-        for row in self.grid.iter_mut() {
-            row.rotate_left(self.width - dx); // equivale a rotate_right(dx)
+        if dx != 0 {
+            for row in self.grid.iter_mut() {
+                row.rotate_left(self.width - dx);
+            }
         }
 
         // Ricalcola adjacent_mines dopo lo shift
@@ -188,6 +188,9 @@ impl Game {
                 let mut count: u8 = 0;
                 for dy in -1_isize..=1 {
                     for dx in -1_isize..=1 {
+                        if dy == 0 && dx == 0 {
+                            continue;
+                        }
                         let ny = y as isize + dy;
                         let nx = x as isize + dx;
                         if ny >= 0
