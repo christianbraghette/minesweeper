@@ -535,7 +535,7 @@ pub fn game_scene(
         loop {
             let mut changed = false;
             let current_secs = game.elapsed_secs();
-            
+
             if game.game_over || game.victory {
                 return end_scene(settings, gilrs);
             } else if game.start_time.is_some() && current_secs != last_displayed_secs {
@@ -597,7 +597,7 @@ pub fn game_scene(
         loop {
             let mut changed = false;
             let current_secs = game.elapsed_secs();
-            
+
             if game.game_over || game.victory {
                 return end_scene(settings, gilrs);
             } else if game.start_time.is_some() && current_secs != last_displayed_secs {

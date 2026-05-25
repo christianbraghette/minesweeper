@@ -498,7 +498,7 @@ impl Game {
                         if !is_cursor {
                             execute!(out, SetForegroundColor(Color::Yellow))?;
                         }
-                        print!(" F ");
+                        print!(" P ");
                     }
                     CellState::Revealed => {
                         if cell.has_mine {
