@@ -164,46 +164,81 @@ impl Game {
 
         let Some((safe_x, safe_y)) = safe else { return };
 
-        // Shift Y: quante righe devo ruotare per portare safe_y su cursor_y?
-        let dy = (self.cursor_y + self.height - safe_y) % self.height;
-        if dy != 0 {
-            self.grid.rotate_left(self.height - dy);
-        }
+        // Shift + ricalcolo in loop finché la cella sotto il cursore è davvero 0
+        // (il wrapping può "avvicinare" mine che prima erano lontane)
+        let mut current_safe_x = safe_x;
+        let mut current_safe_y = safe_y;
 
-        // Shift X: quante colonne devo ruotare per portare safe_x su cursor_x?
-        let dx = (self.cursor_x + self.width - safe_x) % self.width;
-        if dx != 0 {
-            for row in self.grid.iter_mut() {
-                row.rotate_left(self.width - dx);
+        loop {
+            // Shift Y
+            let dy = (self.cursor_y + self.height - current_safe_y) % self.height;
+            if dy != 0 {
+                self.grid.rotate_left(self.height - dy);
             }
-        }
 
-        // Ricalcola adjacent_mines dopo lo shift
-        for y in 0..self.height {
-            for x in 0..self.width {
-                if self.grid[y][x].has_mine {
-                    self.grid[y][x].adjacent_mines = 0;
-                    continue;
+            // Shift X
+            let dx = (self.cursor_x + self.width - current_safe_x) % self.width;
+            if dx != 0 {
+                for row in self.grid.iter_mut() {
+                    row.rotate_left(self.width - dx);
                 }
-                let mut count: u8 = 0;
-                for dy in -1_isize..=1 {
-                    for dx in -1_isize..=1 {
-                        if dy == 0 && dx == 0 {
-                            continue;
-                        }
-                        let ny = y as isize + dy;
-                        let nx = x as isize + dx;
-                        if ny >= 0
-                            && ny < self.height as isize
-                            && nx >= 0
-                            && nx < self.width as isize
-                            && self.grid[ny as usize][nx as usize].has_mine
-                        {
-                            count += 1;
+            }
+
+            // Ricalcola adjacent_mines
+            for y in 0..self.height {
+                for x in 0..self.width {
+                    if self.grid[y][x].has_mine {
+                        self.grid[y][x].adjacent_mines = 0;
+                        continue;
+                    }
+                    let mut count: u8 = 0;
+                    for dy in -1_isize..=1 {
+                        for dx in -1_isize..=1 {
+                            if dy == 0 && dx == 0 {
+                                continue;
+                            }
+                            let ny = y as isize + dy;
+                            let nx = x as isize + dx;
+                            if ny >= 0
+                                && ny < self.height as isize
+                                && nx >= 0
+                                && nx < self.width as isize
+                                && self.grid[ny as usize][nx as usize].has_mine
+                            {
+                                count += 1;
+                            }
                         }
                     }
+                    self.grid[y][x].adjacent_mines = count;
                 }
-                self.grid[y][x].adjacent_mines = count;
+            }
+
+            // La cella sotto il cursore è ancora 0? Perfetto, usciamo
+            let cell = &self.grid[self.cursor_y][self.cursor_x];
+            if !cell.has_mine && cell.adjacent_mines == 0 {
+                break;
+            }
+
+            // Altrimenti cerca la prossima cella 0 valida e riprova
+            let mut found = false;
+            'fix: for y in 0..self.height {
+                for x in 0..self.width {
+                    let c = &self.grid[y][x];
+                    // Salta quella che abbiamo appena provato (è corrotta dal wrapping)
+                    if x == self.cursor_x && y == self.cursor_y {
+                        continue;
+                    }
+                    if !c.has_mine && c.adjacent_mines == 0 {
+                        current_safe_x = x;
+                        current_safe_y = y;
+                        found = true;
+                        break 'fix;
+                    }
+                }
+            }
+
+            if !found {
+                break; // Nessuna cella 0 disponibile, usciamo comunque
             }
         }
     }
@@ -213,8 +248,6 @@ impl Game {
             return;
         }
         if self.first_move {
-            self.cursor_x = x;
-            self.cursor_y = y;
             self.set_starting_zone(); // shifta la mappa sul cursore
             self.start_time = Some(Instant::now()); // avvia il timer
             self.first_move = false;
