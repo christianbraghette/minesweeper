@@ -7,10 +7,7 @@ use crossterm::{
 };
 
 use crate::config::Config;
-use crate::{
-    audio::AudioEngine,
-    settings::{Settings},
-};
+use crate::{audio::AudioEngine, settings::Settings};
 
 #[derive(Clone, Copy, PartialEq)]
 enum CellState {
@@ -188,6 +185,9 @@ impl Game {
     }
 
     pub fn reveal(&mut self, x: usize, y: usize) {
+        if (x > self.width) || (y > self.height) {
+            return;
+        }
         if self.grid[y][x].state == CellState::Revealed {
             let mine_count = self.grid[y][x].adjacent_mines;
             if mine_count == 0 {

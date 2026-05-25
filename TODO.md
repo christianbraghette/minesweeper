@@ -10,5 +10,5 @@ Features:
 
 Bugs:
  - Resolve (0,0) starting position for initial reveal;
- - Panic when mouse click happen below the field;
- - Sounds timing completely off;
+ - ~~Panic when mouse click happen below the field~~;
+ - ~~Sounds timing completely off~~;
