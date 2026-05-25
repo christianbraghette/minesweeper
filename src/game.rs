@@ -1,4 +1,7 @@
-use std::io::{self, BufWriter, Write};
+use std::{
+    io::{self, BufWriter, Write},
+    time::{Duration, Instant},
+};
 
 use crossterm::{
     cursor, execute,
@@ -44,6 +47,9 @@ pub struct Game {
     pub camera_y: usize,
     pub game_over: bool,
     pub victory: bool,
+    pub first_move: bool,
+    pub start_time: Option<Instant>,
+    pub elapsed: Duration,
     audio: AudioEngine,
 }
 
@@ -62,12 +68,27 @@ impl Game {
             cursor_y: 0,
             game_over: false,
             victory: false,
+            first_move: true,
+            start_time: None,
+            elapsed: Duration::ZERO,
             audio: AudioEngine::new(),
         };
         game.audio.set_volume(settings.volume);
         game.generate_map();
-        game.reveal_starting_zone();
         game
+    }
+
+    pub fn elapsed_secs(&self) -> u64 {
+        match self.start_time {
+            None => 0,
+            Some(t) => {
+                if self.game_over || self.victory {
+                    self.elapsed.as_secs()
+                } else {
+                    t.elapsed().as_secs()
+                }
+            }
+        }
     }
 
     // ── LCG PRNG ──────────────────────────────────────────────────────────────
@@ -120,66 +141,66 @@ impl Game {
         }
     }
 
-    pub fn reveal_starting_zone(&mut self) {
-        for y in 0..self.height {
-            for x in 0..self.width {
-                if !self.grid[y][x].has_mine && self.grid[y][x].adjacent_mines == 0 {
-                    self.reveal(x, y);
-                    self.cursor_x = x;
-                    self.cursor_y = y;
-                    return;
-                }
-            }
-        }
-
-        // --- 2. FALLBACK: Se non esistono celle da '0', cerchiamo la prima cella non-mina
-        // che ha almeno un vicino identico (stesso numero di mine adiacenti).
-        for y in 0..self.height {
-            for x in 0..self.width {
-                if self.grid[y][x].has_mine {
-                    continue;
-                }
-
-                let current_mines = self.grid[y][x].adjacent_mines;
-
-                // Controlliamo i vicini per vedere se ce n'è uno identico
-                for dy in -1_isize..=1 {
-                    for dx in -1_isize..=1 {
-                        if dy == 0 && dx == 0 {
-                            continue;
-                        }
-                        let ny = y as isize + dy;
-                        let nx = x as isize + dx;
-
-                        if nx >= 0
-                            && nx < self.width as isize
-                            && ny >= 0
-                            && ny < self.height as isize
-                        {
-                            let neighbor = &self.grid[ny as usize][nx as usize];
-                            // Se il vicino non ha mine ed ha lo stesso numero di mine adiacenti
-                            if !neighbor.has_mine && neighbor.adjacent_mines == current_mines {
-                                self.reveal(x, y);
-                                self.cursor_x = x;
-                                self.cursor_y = y;
-                                return;
-                            }
-                        }
+    fn set_starting_zone(&mut self) {
+        // Trova la prima cella sicura con adjacent_mines == 0
+        let safe = 'search: {
+            for y in 0..self.height {
+                for x in 0..self.width {
+                    if !self.grid[y][x].has_mine && self.grid[y][x].adjacent_mines == 0 {
+                        break 'search Some((x, y));
                     }
                 }
             }
+            // Fallback: prima cella non-mina qualsiasi
+            'fallback: {
+                for y in 0..self.height {
+                    for x in 0..self.width {
+                        if !self.grid[y][x].has_mine {
+                            break 'fallback Some((x, y));
+                        }
+                    }
+                }
+                None
+            }
+        };
+
+        let Some((safe_x, safe_y)) = safe else { return };
+
+        // Shift ciclico delle righe (asse Y)
+        // Vogliamo che safe_y finisca su cursor_y
+        let dy = (self.cursor_y + self.height - safe_y) % self.height;
+        self.grid.rotate_left(self.height - dy); // equivale a rotate_right(dy)
+
+        // Shift ciclico delle colonne (asse X)
+        // Vogliamo che safe_x finisca su cursor_x
+        let dx = (self.cursor_x + self.width - safe_x) % self.width;
+        for row in self.grid.iter_mut() {
+            row.rotate_left(self.width - dx); // equivale a rotate_right(dx)
         }
 
-        // --- 3. ULTIMA SPIAGGIA: Se la mappa è un incubo matematico e non trova nemmeno coppie identiche,
-        // riveliamo semplicemente la primissima cella sicura in alto a sinistra.
+        // Ricalcola adjacent_mines dopo lo shift
         for y in 0..self.height {
             for x in 0..self.width {
-                if !self.grid[y][x].has_mine {
-                    self.reveal(x, y);
-                    self.cursor_x = x;
-                    self.cursor_y = y;
-                    return;
+                if self.grid[y][x].has_mine {
+                    self.grid[y][x].adjacent_mines = 0;
+                    continue;
                 }
+                let mut count: u8 = 0;
+                for dy in -1_isize..=1 {
+                    for dx in -1_isize..=1 {
+                        let ny = y as isize + dy;
+                        let nx = x as isize + dx;
+                        if ny >= 0
+                            && ny < self.height as isize
+                            && nx >= 0
+                            && nx < self.width as isize
+                            && self.grid[ny as usize][nx as usize].has_mine
+                        {
+                            count += 1;
+                        }
+                    }
+                }
+                self.grid[y][x].adjacent_mines = count;
             }
         }
     }
@@ -187,6 +208,13 @@ impl Game {
     pub fn reveal(&mut self, x: usize, y: usize) {
         if (x > self.width) || (y > self.height) {
             return;
+        }
+        if self.first_move {
+            self.cursor_x = x;
+            self.cursor_y = y;
+            self.set_starting_zone(); // shifta la mappa sul cursore
+            self.start_time = Some(Instant::now()); // avvia il timer
+            self.first_move = false;
         }
         if self.grid[y][x].state == CellState::Revealed {
             let mine_count = self.grid[y][x].adjacent_mines;
@@ -239,6 +267,7 @@ impl Game {
 
         if self.grid[y][x].has_mine {
             self.game_over = true;
+            self.elapsed = self.start_time.map_or(Duration::ZERO, |t| t.elapsed());
             self.audio.play_explosion();
             for ry in 0..self.height {
                 for rx in 0..self.width {
@@ -296,6 +325,7 @@ impl Game {
             }
         }
         self.victory = true;
+        self.elapsed = self.start_time.map_or(Duration::ZERO, |t| t.elapsed());
         self.audio.play_victory();
     }
 
@@ -357,7 +387,18 @@ impl Game {
             terminal::Clear(ClearType::CurrentLine),
             SetForegroundColor(Color::Yellow)
         )?;
-        println!("  Mines: {}", self.num_mines);
+        // Congela il tempo mostrato quando la partita è finita
+        let display_time = if self.game_over || self.victory {
+            self.elapsed.as_secs()
+        } else {
+            self.start_time.map_or(0, |t| t.elapsed().as_secs())
+        };
+        println!(
+            "  Mines: {}    Time: {}:{}",
+            self.num_mines,
+            display_time / 60,
+            display_time % 60
+        );
         execute!(out, ResetColor)?;
 
         let (max_w, max_h) = self.viewport_size();

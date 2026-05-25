@@ -529,13 +529,19 @@ pub fn game_scene(
 
     let mut last_gamepad_move = Instant::now();
 
+    let mut last_displayed_secs = u64::MAX;
+
     if settings.gamepad {
         loop {
+            let mut changed = false;
+            let current_secs = game.elapsed_secs();
+            
             if game.game_over || game.victory {
                 return end_scene(settings, gilrs);
+            } else if game.start_time.is_some() && current_secs != last_displayed_secs {
+                last_displayed_secs = current_secs;
+                changed = true;
             }
-
-            let mut changed = false;
 
             // ── Gamepad input ────────────────────────────────────────────────────
             while let Some(GEvent { event, .. }) = gilrs.next_event() {
@@ -589,11 +595,16 @@ pub fn game_scene(
         }
     } else {
         loop {
+            let mut changed = false;
+            let current_secs = game.elapsed_secs();
+            
             if game.game_over || game.victory {
                 return end_scene(settings, gilrs);
+            } else if game.start_time.is_some() && current_secs != last_displayed_secs {
+                last_displayed_secs = current_secs;
+                changed = true;
             }
 
-            let mut changed = false;
             // ── Keyboard and Mouse input ─────────────────────────────────────────
             while event::poll(Duration::from_millis(16))? {
                 match event::read()? {
