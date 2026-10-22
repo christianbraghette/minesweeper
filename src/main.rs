@@ -1,12 +1,13 @@
-mod game;
-mod controls;
 mod audio;
 mod config;
+mod controls;
+mod game;
 mod scene;
 mod settings;
 
 use crate::{
-    scene::{MenuResult, PostGameAction, game_scene, main_menu_scene, options_menu_scene}, settings::Settings
+    scene::{MenuResult, PostGameAction, game_scene, main_menu_scene, options_menu_scene},
+    settings::Settings,
 };
 use crossterm::{
     cursor,
@@ -14,7 +15,7 @@ use crossterm::{
     execute,
     terminal::{self},
 };
-use gilrs::{Gilrs};
+use gilrs::Gilrs;
 use std::io;
 
 fn main() -> io::Result<()> {
@@ -22,7 +23,7 @@ fn main() -> io::Result<()> {
     let mut gilrs = Gilrs::new().unwrap();
 
     'app: loop {
-        // Abilitiamo la raw mode e il mouse anche per i menu in modo che la selezione tastiera/mouse sia fluida
+        // Enable raw mode and mouse capture for the menus too, so keyboard/mouse selection is smooth
         terminal::enable_raw_mode()?;
         let mut stdout = io::stdout();
         execute!(

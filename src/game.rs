@@ -164,8 +164,8 @@ impl Game {
 
         let Some((safe_x, safe_y)) = safe else { return };
 
-        // Shift + ricalcolo in loop finché la cella sotto il cursore è davvero 0
-        // (il wrapping può "avvicinare" mine che prima erano lontane)
+        // Shift and recompute in a loop until the cell under the cursor is really 0
+        // (wrapping can bring mines closer that were previously far away)
         let mut current_safe_x = safe_x;
         let mut current_safe_y = safe_y;
 
@@ -184,7 +184,7 @@ impl Game {
                 }
             }
 
-            // Ricalcola adjacent_mines
+            // Recompute adjacent_mines
             for y in 0..self.height {
                 for x in 0..self.width {
                     if self.grid[y][x].has_mine {
@@ -213,18 +213,18 @@ impl Game {
                 }
             }
 
-            // La cella sotto il cursore è ancora 0? Perfetto, usciamo
+            // Is the cell under the cursor still 0? Great, we're done
             let cell = &self.grid[self.cursor_y][self.cursor_x];
             if !cell.has_mine && cell.adjacent_mines == 0 {
                 break;
             }
 
-            // Altrimenti cerca la prossima cella 0 valida e riprova
+            // Otherwise look for the next valid 0 cell and try again
             let mut found = false;
             'fix: for y in 0..self.height {
                 for x in 0..self.width {
                     let c = &self.grid[y][x];
-                    // Salta quella che abbiamo appena provato (è corrotta dal wrapping)
+                    // Skip the one we just tried (wrapping invalidated it)
                     if x == self.cursor_x && y == self.cursor_y {
                         continue;
                     }
@@ -238,7 +238,7 @@ impl Game {
             }
 
             if !found {
-                break; // Nessuna cella 0 disponibile, usciamo comunque
+                break; // No 0 cell available, stop anyway
             }
         }
     }
@@ -248,8 +248,8 @@ impl Game {
             return;
         }
         if self.first_move {
-            self.set_starting_zone(); // shifta la mappa sul cursore
-            self.start_time = Some(Instant::now()); // avvia il timer
+            self.set_starting_zone(); // shift the map onto the cursor
+            self.start_time = Some(Instant::now()); // start the timer
             self.first_move = false;
         }
         if self.grid[y][x].state == CellState::Revealed {
@@ -423,7 +423,7 @@ impl Game {
             terminal::Clear(ClearType::CurrentLine),
             SetForegroundColor(Color::Yellow)
         )?;
-        // Congela il tempo mostrato quando la partita è finita
+        // Freeze the displayed time once the game is over
         let display_time = if self.game_over || self.victory {
             self.elapsed.as_secs()
         } else {

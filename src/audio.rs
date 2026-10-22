@@ -24,7 +24,7 @@ impl AudioEngine {
 
     pub fn set_volume(&self, value: u8) {
         if let Some(ref sink) = self.sink {
-            sink.set_volume((value/255).into());
+            sink.set_volume(value as f32 / 255.0);
         }
     }
 
